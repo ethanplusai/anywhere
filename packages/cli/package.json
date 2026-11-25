@@ -1,0 +1,42 @@
+{
+  "name": "anywr",
+  "version": "0.1.0",
+  "description": "Local mirror CLI for Anywhere shared project context.",
+  "license": "MIT",
+  "homepage": "https://anywr.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ethanplusai/anywhere.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ethanplusai/anywhere/issues"
+  },
+  "type": "module",
+  "bin": {
+    "anywr": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "skill:build": "node ../../skill/build.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.15.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.1"
+  }
+}

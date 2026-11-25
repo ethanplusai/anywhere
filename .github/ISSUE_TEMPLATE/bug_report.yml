@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in Anywhere does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use fictional data only. Never paste a token, a password, a database URL or real page content.
+        Security problems go through the Security tab, not here.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - Hosted (anywr.ai)
+        - Self-hosted with Docker
+        - Self-hosted with Node.js
+        - The anywr command
+        - The skill
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Which agent, and its version
+      placeholder: Claude Code 2.x, ChatGPT web, Codex CLI 0.x
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: For self-hosted servers, the output of `git rev-parse --short HEAD`.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Ask Claude to "add this decision to Anywhere"
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Remove tokens and passwords first.
+      render: text

@@ -1,0 +1,43 @@
+# Anywhere: the server plus Postgres.
+#   cp .env.example .env   # then edit BASE_URL and POSTGRES_PASSWORD
+#   docker compose up -d
+# Put a TLS proxy in front for anything beyond localhost: Claude's connectors need https on port 443.
+
+services:
+  db:
+    # Pinned by digest (audit D10). Update with: docker buildx imagetools inspect postgres:17
+    image: postgres:17@sha256:223efeb196329b55b3b9a13db144956411dbc18e727e59f681c3e0aede6475cf
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anywhere
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: anywhere
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anywhere -d anywhere"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Every setting in .env reaches the server (sign-ups, limits, quotas, the MCP host); the values
+    # under `environment` below are the ones compose itself has to build or pin.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://anywhere:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/anywhere
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      PORT: "3000"
+    # Published on loopback only: put your TLS proxy on this machine in front (audit D10).
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+
+volumes:
+  pgdata:

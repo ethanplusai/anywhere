@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+.anywhere/
+.vercel/
+# Agent and editor state, which holds paths from the computer it ran on.
+.claude/
+.cursor/
+.agents/
+.playwright-mcp/
+# The embedded database's default folder.
+/data/
+/packages/server/data/
+packages/server/layout.md
+.demo/
+.local/

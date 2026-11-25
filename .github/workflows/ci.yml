@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+      - name: The generated skill is current
+        run: node skill/build.mjs && git diff --exit-code skill/anywhere
+      - name: The embedded skill is current
+        run: node packages/server/scripts/embed-skill.mjs && git diff --exit-code packages/server/src/web/skill.generated.ts
+      - name: The embedded fonts are current
+        run: node packages/server/scripts/embed-fonts.mjs && git diff --exit-code packages/server/src/web/fonts.generated.ts
+      # Runtime dependencies must be clean at high; dev tooling is held to critical.
+      - run: pnpm audit --prod --audit-level high
+      - run: pnpm audit --audit-level critical
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: docker build -t anywhere:ci .
