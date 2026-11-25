@@ -4,6 +4,22 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- Setting up maps the work a person already has. The skill's new `scripts/map-work.mjs` replaces
+  `find-projects.mjs`: it merges every checkout, copy and worktree of a repository, groups
+  repositories by owner and product, reads session titles to say what each was about, notes where
+  each is hosted, and sets aside temporary folders, test runs, generated sites, other people's
+  projects and folders that no longer exist. `choose_projects` now shows that map grouped by
+  business, with bring in, one line or skip for each and a box for corrections.
+- Projects have a `group` (the business they belong to), a `status` (`active`, `paused` or
+  `archived`) and `repos` (their code repositories). `create_project` takes them, the new
+  `update_project` tool and `PATCH /api/v1/projects/:slug` change them, and `list_projects` (and
+  `GET /projects?repo=`) finds the project for a folder from its git remote. The projects board
+  lists projects under their group and tucks archived ones away.
+- Two new standard pages: `where.md` (repositories, hosting, services and how the parts connect)
+  and `rules.md` (how to work on the project).
+
 ## [0.1.0] - Unreleased
 
 The first public release.

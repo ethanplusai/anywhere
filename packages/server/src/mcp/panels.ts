@@ -27,7 +27,17 @@ export const APP_PANEL = "ui://anywhere/app.html";
 export interface BoardPanelData {
   kind: "board";
   url: string | null;
-  projects: { name: string; slug: string; description: string; pages: number; updatedAt: string; lastBy: string }[];
+  projects: {
+    name: string;
+    slug: string;
+    description: string;
+    /** The business or group it belongs to; projects are listed under it. */
+    group: string;
+    status: "active" | "paused" | "archived";
+    pages: number;
+    updatedAt: string;
+    lastBy: string;
+  }[];
   recent: { project: string; projectName: string; path: string; who: string; action: string; at: string }[];
 }
 
@@ -101,13 +111,19 @@ export function projectPanelData(
   };
 }
 
-/** What the picker draws: the projects an agent found, and the ones already in Anywhere. */
+/** What the map of someone's work draws: the projects an agent found, and the ones already in Anywhere. */
 export interface PickerCandidate {
   name: string;
-  path?: string | undefined;
-  last_active?: string | undefined;
-  note?: string | undefined;
   group?: string | undefined;
+  description?: string | undefined;
+  repos?: string[] | undefined;
+  path?: string | undefined;
+  checkouts?: number | undefined;
+  last_active?: string | undefined;
+  suggest?: "bring_in" | "brief" | "skip" | undefined;
+  reason?: string | undefined;
+  existing?: string | undefined;
+  note?: string | undefined;
 }
 export interface PickerPanelData {
   kind: "picker";
@@ -200,6 +216,29 @@ label.pick:hover { background: var(--inset); }
 label.pick input { width: 1rem; height: 1rem; margin: 0.25rem 0 0; accent-color: var(--accent); }
 .tag { display: inline-flex; align-items: center; padding: 0.15rem 0.6rem; border-radius: 999px; background: var(--wash); color: var(--accent-text); font-size: 0.8125rem; font-weight: 550; white-space: nowrap; }
 .scroll { max-height: 26rem; overflow-y: auto; }
+.map { max-height: 34rem; }
+.maprow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; align-items: start; padding: 0.75rem 1.25rem; }
+.maprow .name { font-weight: 550; overflow-wrap: anywhere; }
+.maprow .desc { color: var(--text2); font-size: 0.875rem; overflow-wrap: anywhere; }
+.maprow .facts { color: var(--text2); font-size: 0.8125rem; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.maprow .facts .mono { font-size: 0.8125rem; }
+.maprow.out .name, .maprow.out .desc { color: var(--text2); }
+.maprow.out .name { font-weight: 500; }
+.maprow .tag { justify-self: end; }
+.seg { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--inset); }
+.seg label { position: relative; padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.8125rem; font-weight: 550; color: var(--text2); cursor: pointer; white-space: nowrap; transition: background-color 0.15s, color 0.15s; }
+.seg label:hover { color: var(--text); }
+.seg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.seg label:has(input:checked) { background: var(--wash); color: var(--accent-text); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg input:disabled { cursor: default; }
+.fix { display: grid; gap: 0.4rem; padding: 0.9rem 1.25rem; border-block-start: 1px solid var(--line); }
+.fix label { font-size: 0.8125rem; font-weight: 550; color: var(--text2); }
+textarea { width: 100%; min-height: 3.5rem; resize: vertical; padding: 0.6rem 0.75rem; border: 1px solid var(--line2); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; font-size: 1rem; line-height: 1.45; }
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.paused .name::after { content: " \\00b7  paused"; color: var(--text2); font-weight: 400; }
+details.archived summary { padding: 0.7rem 1.25rem; color: var(--text2); font-size: 0.875rem; cursor: pointer; }
+details.archived summary:hover { background: var(--inset); }
 .said { padding: 0.9rem 1.25rem; color: var(--text2); white-space: pre-wrap; border-block-start: 1px solid var(--line); }
 .prose { max-width: 46rem; line-height: 1.7; overflow-wrap: break-word; }
 .prose > * + * { margin-block-start: 0.9rem; }
@@ -219,7 +258,7 @@ label.pick input { width: 1rem; height: 1rem; margin: 0.25rem 0 0; accent-color:
 .prose table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.9375rem; }
 .prose th, .prose td { padding: 0.45rem 0.8rem; border: 1px solid var(--line); text-align: start; }
 .prose hr { border: 0; border-block-start: 1px solid var(--line); margin-block: 1.5rem; }
-@media (max-width: 30rem) { .row .meta { grid-row: auto; grid-column: 1; text-align: start; } .cols > .sec + .sec { border-inline-start: 0; border-block-start: 1px solid var(--line); } }
+@media (max-width: 30rem) { .maprow { grid-template-columns: minmax(0, 1fr); } .maprow .tag { justify-self: start; } .row .meta { grid-row: auto; grid-column: 1; text-align: start; } .cols > .sec + .sec { border-inline-start: 0; border-block-start: 1px solid var(--line); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 `;
 
@@ -374,17 +413,44 @@ function board(d) {
     ? "Every agent you connect reads and writes these pages. Open one, or just ask for it."
     : "Nothing here yet. Say \\u201cSet up Anywhere\\u201d and your agent brings your projects in."));
   app.appendChild(head);
+  function projectRow(p) {
+    var b = el("button", "row" + (p.status === "paused" ? " paused" : ""));
+    b.appendChild(el("span", "name", p.name));
+    b.appendChild(el("span", "meta", p.pages + (p.pages === 1 ? " page" : " pages") + " \\u00b7 " + ago(p.updatedAt)));
+    b.appendChild(el("span", "desc", p.description || "No description yet"));
+    b.onclick = function () { showProject(p.slug, p.name); };
+    return b;
+  }
   if (d.projects.length) {
+    // Projects under the business they belong to, the most recently changed group first.
+    var live = d.projects.filter(function (p) { return p.status !== "archived"; });
+    var archived = d.projects.filter(function (p) { return p.status === "archived"; });
+    var order = [], byGroup = {};
+    live.forEach(function (p) {
+      var g = p.group || "";
+      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
+      byGroup[g].push(p);
+    });
+    var grouped = order.length > 1 || (order.length === 1 && order[0] !== "");
     var rows = el("div", "rows");
     rows.style.borderBlockEnd = "1px solid var(--line)";
-    d.projects.forEach(function (p) {
-      var b = el("button", "row");
-      b.appendChild(el("span", "name", p.name));
-      b.appendChild(el("span", "meta", p.pages + (p.pages === 1 ? " page" : " pages") + " \\u00b7 " + ago(p.updatedAt)));
-      b.appendChild(el("span", "desc", p.description || "No description yet"));
-      b.onclick = function () { showProject(p.slug, p.name); };
-      rows.appendChild(b);
+    order.forEach(function (g) {
+      var block = el("div");
+      if (grouped) block.appendChild(el("p", "group", g || "Other"));
+      var inner = el("div", "rows");
+      byGroup[g].sort(function (a, b) { return (a.status === "paused") - (b.status === "paused"); });
+      byGroup[g].forEach(function (p) { inner.appendChild(projectRow(p)); });
+      block.appendChild(inner);
+      rows.appendChild(block);
     });
+    if (archived.length) {
+      var more = el("details", "archived");
+      more.appendChild(el("summary", "", archived.length + " archived"));
+      var inner2 = el("div", "rows");
+      archived.forEach(function (p) { inner2.appendChild(projectRow(p)); });
+      more.appendChild(inner2);
+      rows.appendChild(more);
+    }
     app.appendChild(rows);
   }
   if (d.recent && d.recent.length) app.appendChild(changes(d.recent, true));
@@ -472,51 +538,102 @@ function page(d) {
   return app;
 }
 
+// The map of someone's work, for setting up: what the agent found, grouped by business, with
+// what it suggests for each. The person confirms or changes each choice and can add corrections.
 function picker(d) {
   var app = shell([{ text: "Set up" }], null);
   var head = section();
-  head.appendChild(el("h1", "", "Which projects should Anywhere keep?"));
-  head.appendChild(el("p", "lead", "Found from folder names and dates on this computer. Nothing is brought in until you choose."));
+  head.appendChild(el("h1", "", "Here is the work I found. Is this right?"));
+  head.appendChild(el("p", "lead", "Grouped by business, with copies of the same code counted as one project. Choose what Anywhere keeps. Nothing is read until you confirm."));
   app.appendChild(head);
   var have = {};
-  (d.existing || []).forEach(function (p) { have[String(p.name).toLowerCase()] = true; have[String(p.slug).toLowerCase()] = true; });
-  var box = el("div", "rows scroll");
-  var picks = [], lastGroup;
+  (d.existing || []).forEach(function (p) { have[String(p.name).toLowerCase()] = p.slug; have[String(p.slug).toLowerCase()] = p.slug; });
+  var CHOICES = [["bring_in", "Bring in"], ["brief", "One line"], ["skip", "Skip"]];
+  var box = el("div", "rows scroll map");
+  var picks = [], lastGroup = null, n = 0;
   (d.candidates || []).forEach(function (c) {
-    if (c.group && c.group !== lastGroup) box.appendChild(el("p", "group", c.group));
-    lastGroup = c.group;
-    var row = el("label", "pick");
-    var input = document.createElement("input");
-    input.type = "checkbox";
-    var already = have[String(c.name).toLowerCase()];
-    input.disabled = Boolean(already);
-    row.appendChild(input);
+    var g = c.group || "";
+    if (g !== lastGroup && (g || lastGroup !== null)) box.appendChild(el("p", "group", g || "Other"));
+    lastGroup = g;
+    var already = c.existing || have[String(c.name).toLowerCase()];
+    var row = el("div", "maprow");
     var mid = el("div");
     mid.appendChild(el("div", "name", c.name));
-    mid.firstChild.style.fontWeight = "550";
-    if (c.path) mid.appendChild(el("div", "meta mono", c.path));
-    if (c.note) mid.appendChild(el("div", "meta", c.note));
+    if (c.description) mid.appendChild(el("div", "desc", c.description));
+    var facts = el("div", "facts");
+    var bits = [];
+    if (c.repos && c.repos.length) {
+      var r = el("span", "mono", c.repos.slice(0, 2).join(", ") + (c.repos.length > 2 ? " +" + (c.repos.length - 2) : ""));
+      facts.appendChild(r);
+    } else if (c.path) facts.appendChild(el("span", "mono", c.path));
+    if (c.checkouts && c.checkouts > 1) bits.push(c.checkouts + " copies here");
+    if (c.last_active) bits.push(ago(c.last_active));
+    if (c.reason) bits.push(c.reason);
+    if (c.note) bits.push(c.note);
+    if (bits.length) facts.appendChild(document.createTextNode((facts.firstChild ? "  ·  " : "") + bits.join("  ·  ")));
+    if (facts.firstChild) mid.appendChild(facts);
     row.appendChild(mid);
-    row.appendChild(already ? el("span", "tag", "Already in") : el("span", "meta", c.last_active ? ago(c.last_active) : ""));
+    if (already) {
+      row.appendChild(el("span", "tag", "Already in"));
+      box.appendChild(row);
+      return;
+    }
+    var seg = el("div", "seg");
+    seg.setAttribute("role", "radiogroup");
+    seg.setAttribute("aria-label", c.name);
+    var name = "pick" + (n++);
+    var chosen = c.suggest || "skip";
+    var item = { c: c, row: row, value: chosen, inputs: [] };
+    CHOICES.forEach(function (choice) {
+      var lab = el("label");
+      var input = document.createElement("input");
+      input.type = "radio";
+      input.name = name;
+      input.value = choice[0];
+      input.checked = choice[0] === chosen;
+      input.onchange = function () { item.value = choice[0]; update(); };
+      lab.appendChild(input);
+      lab.appendChild(document.createTextNode(choice[1]));
+      seg.appendChild(lab);
+      item.inputs.push(input);
+    });
+    row.appendChild(seg);
     box.appendChild(row);
-    if (!already) picks.push({ input: input, c: c });
+    picks.push(item);
   });
   app.appendChild(box);
+  var fix = el("div", "fix");
+  var fixLabel = el("label", "", "Anything to correct? Two projects that are one, a wrong name, something missing.");
+  var notes = document.createElement("textarea");
+  notes.id = "map-notes";
+  fixLabel.setAttribute("for", "map-notes");
+  notes.placeholder = "Optional";
+  fix.appendChild(fixLabel);
+  fix.appendChild(notes);
+  app.appendChild(fix);
   var foot = el("div", "foot");
   foot.style.borderBlockStart = "1px solid var(--line)";
   var count = el("span", "meta", "");
-  var bring = el("button", "", "Bring these in");
+  var confirm = el("button", "", "Confirm");
   function update() {
-    var n = picks.filter(function (p) { return p.input.checked; }).length;
-    count.textContent = n ? n + " chosen" : "Choose one or more";
-    bring.disabled = !n;
+    var t = { bring_in: 0, brief: 0, skip: 0 };
+    picks.forEach(function (p) { t[p.value]++; p.row.classList.toggle("out", p.value === "skip"); });
+    count.textContent = t.bring_in + " to bring in · " + t.brief + " as one line · " + t.skip + " skipped";
+    confirm.disabled = !(t.bring_in + t.brief) && !notes.value.trim();
   }
-  picks.forEach(function (p) { p.input.onchange = update; });
-  bring.onclick = function () {
-    var chosen = picks.filter(function (p) { return p.input.checked; }).map(function (p) { return p.c; });
-    var text = "Bring these projects into Anywhere:\\n" + chosen.map(function (c) { return "- " + c.name + (c.path ? " (" + c.path + ")" : ""); }).join("\\n");
-    bring.disabled = true;
-    picks.forEach(function (p) { p.input.disabled = true; });
+  notes.oninput = update;
+  function label(c) { return (c.group ? c.group + " / " : "") + c.name + (c.repos && c.repos.length ? " (" + c.repos.join(", ") + ")" : c.path ? " (" + c.path + ")" : ""); }
+  confirm.onclick = function () {
+    var parts = ["Set up Anywhere with this map of my work."];
+    [["bring_in", "Bring in fully:"], ["brief", "One line each, marked paused:"], ["skip", "Leave out:"]].forEach(function (k) {
+      var these = picks.filter(function (p) { return p.value === k[0]; });
+      if (these.length) parts.push(k[1] + "\\n" + these.map(function (p) { return "- " + label(p.c); }).join("\\n"));
+    });
+    if (notes.value.trim()) parts.push("Corrections: " + notes.value.trim());
+    var text = parts.join("\\n\\n");
+    confirm.disabled = true;
+    notes.disabled = true;
+    picks.forEach(function (p) { p.inputs.forEach(function (i) { i.disabled = true; }); });
     say(text).then(
       function () { count.textContent = "Sent. Your agent takes it from here."; },
       function () {
@@ -528,7 +645,7 @@ function picker(d) {
   };
   update();
   foot.appendChild(count);
-  foot.appendChild(bring);
+  foot.appendChild(confirm);
   app.appendChild(foot);
   return app;
 }

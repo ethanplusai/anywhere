@@ -10,6 +10,11 @@ import {
   assertSlug,
   deriveSlug,
   isStandardPage,
+  MAX_GROUP,
+  MAX_REPOS,
+  normalizeRepo,
+  PROJECT_STATUSES,
+  type ProjectStatus,
   type StandardPath,
 } from "./validate.js";
 
@@ -18,7 +23,21 @@ export interface Project {
   slug: string;
   name: string;
   description: string;
+  /** The business or group it belongs to, such as a company or "Personal"; empty when none. */
+  group: string;
+  status: ProjectStatus;
+  /** Code repositories that make up the project, each as "host/owner/name". */
+  repos: string[];
   updatedAt: string;
+}
+
+/** What can be set on a project after it is made, and on create besides name and slug. */
+export interface ProjectDetails {
+  name?: unknown;
+  description?: unknown;
+  group?: unknown;
+  status?: unknown;
+  repos?: unknown;
 }
 export interface PageMeta {
   path: string;
@@ -75,6 +94,9 @@ interface ProjectRow {
   slug: string;
   name: string;
   description: string;
+  group_name: string;
+  status: string;
+  repos: unknown;
   updated_at: Date;
 }
 interface PageRow {
@@ -92,8 +114,17 @@ const toProject = (r: ProjectRow): Project => ({
   slug: r.slug,
   name: r.name,
   description: r.description,
+  group: r.group_name ?? "",
+  status: (PROJECT_STATUSES as readonly string[]).includes(r.status) ? (r.status as ProjectStatus) : "active",
+  repos: repoList(r.repos),
   updatedAt: new Date(r.updated_at).toISOString(),
 });
+
+/** jsonb arrives parsed from pg and PGlite alike; anything else is treated as no repos. */
+function repoList(v: unknown): string[] {
+  const arr = typeof v === "string" ? (JSON.parse(v) as unknown) : v;
+  return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+}
 const toMeta = (r: PageRow): PageMeta => ({
   path: r.path,
   version: r.version,
@@ -107,7 +138,7 @@ const PAGE_META_COLS = "id, path, version, sha256, size, updated_at, deleted_at"
 const PAGE_COLS = `${PAGE_META_COLS}, content`;
 const MAX_NAME = 200;
 const MAX_DESCRIPTION = 1000;
-const PROJECT_COLS = "id, user_id, slug, name, description, updated_at";
+const PROJECT_COLS = "id, user_id, slug, name, description, group_name, status, repos, updated_at";
 /** Bytes of each page read for get_project's first lines (audit D3). */
 const HEAD_BYTES = 1024;
 /** Characters of a page ts_headline looks at for a snippet (audit D4). */
@@ -134,6 +165,59 @@ function hasControl(s: string): boolean {
     if ((code < 0x20 && code !== 0x09) || code === 0x7f) return true;
   }
   return false;
+}
+
+type CheckedDetails = { name?: string; description?: string; group_name?: string; status?: ProjectStatus; repos?: string[] };
+
+/**
+ * Checks the optional details of a project and returns the database values for those given.
+ * Repos are normalised and de-duplicated, so any spelling of a remote finds the project.
+ */
+function checkDetails(d: ProjectDetails): CheckedDetails {
+  const out: CheckedDetails = {};
+  if (d.name !== undefined) {
+    if (typeof d.name !== "string" || !d.name.trim() || d.name.length > MAX_NAME || hasControl(d.name)) {
+      throw new AppError(422, "invalid_body", `name must be a non-empty string of at most ${MAX_NAME} characters.`);
+    }
+    out.name = d.name.trim();
+  }
+  if (d.description !== undefined) {
+    if (typeof d.description !== "string" || d.description.length > MAX_DESCRIPTION || hasControl(d.description)) {
+      throw new AppError(422, "invalid_body", `description must be a string of at most ${MAX_DESCRIPTION} characters.`);
+    }
+    out.description = d.description;
+  }
+  if (d.group !== undefined) {
+    if (typeof d.group !== "string" || d.group.length > MAX_GROUP || hasControl(d.group)) {
+      throw new AppError(422, "invalid_body", `group must be a string of at most ${MAX_GROUP} characters.`);
+    }
+    out.group_name = d.group.trim();
+  }
+  if (d.status !== undefined) {
+    if (typeof d.status !== "string" || !(PROJECT_STATUSES as readonly string[]).includes(d.status)) {
+      throw new AppError(422, "invalid_body", `status must be one of ${PROJECT_STATUSES.join(", ")}.`);
+    }
+    out.status = d.status as ProjectStatus;
+  }
+  if (d.repos !== undefined) {
+    if (!Array.isArray(d.repos) || d.repos.length > MAX_REPOS) {
+      throw new AppError(422, "invalid_body", `repos must be a list of at most ${MAX_REPOS} repository addresses.`);
+    }
+    const repos: string[] = [];
+    for (const r of d.repos) {
+      const n = normalizeRepo(r);
+      if (!n) {
+        throw new AppError(
+          422,
+          "invalid_body",
+          `"${String(r).slice(0, 120)}" is not a repository address. Use its git remote, such as github.com/owner/name.`,
+        );
+      }
+      if (!repos.includes(n)) repos.push(n);
+    }
+    out.repos = repos;
+  }
+  return out;
 }
 
 function firstNonEmptyLine(content: string): string {
@@ -321,7 +405,19 @@ export function createService(db: Db, layout: Layout, limits: Limits = DEFAULT_L
   }
 
   return {
-    async listProjects(userId: string): Promise<Project[]> {
+    /** Every project, or with `repo` only those made up of that repository (any spelling of its remote). */
+    async listProjects(userId: string, options: { repo?: unknown } = {}): Promise<Project[]> {
+      if (options.repo !== undefined) {
+        const repo = normalizeRepo(options.repo);
+        if (!repo) {
+          throw new AppError(422, "invalid_body", "repo must be a repository address, such as github.com/owner/name or a git remote URL.");
+        }
+        const rows = await db.query<ProjectRow>(
+          `SELECT ${PROJECT_COLS} FROM projects WHERE user_id = $1 AND repos @> $2::jsonb ORDER BY updated_at DESC, slug`,
+          [userId, JSON.stringify([repo])],
+        );
+        return rows.map(toProject);
+      }
       const rows = await db.query<ProjectRow>(
         `SELECT ${PROJECT_COLS} FROM projects WHERE user_id = $1 ORDER BY updated_at DESC, slug`,
         [userId],
@@ -329,12 +425,32 @@ export function createService(db: Db, layout: Layout, limits: Limits = DEFAULT_L
       return rows.map(toProject);
     },
 
+    /** Changes a project's name, description, group, status or repos; its pages are untouched. */
+    async updateProject(userId: string, slug: string, details: ProjectDetails): Promise<Project> {
+      const set = checkDetails(details);
+      const cols = Object.keys(set) as (keyof CheckedDetails)[];
+      if (!cols.length) {
+        throw new AppError(422, "invalid_body", "Give at least one of name, description, group, status or repos.");
+      }
+      return db.transaction(async (tx) => {
+        const row = await findProject(tx, userId, slug, true);
+        const values = cols.map((c) => (c === "repos" ? JSON.stringify(set[c]) : set[c]));
+        const assignments = cols.map((c, i) => `${c} = $${i + 2}${c === "repos" ? "::jsonb" : ""}`).join(", ");
+        const [fresh] = await tx.query<ProjectRow>(
+          `UPDATE projects SET ${assignments}, updated_at = now() WHERE id = $1 RETURNING ${PROJECT_COLS}`,
+          [row.id, ...values],
+        );
+        return toProject(fresh!);
+      });
+    },
+
     async createProject(
       userId: string,
-      input: { name: unknown; slug?: unknown; description?: unknown },
+      input: { name: unknown; slug?: unknown } & Omit<ProjectDetails, "name">,
       actor: string | null = null,
     ): Promise<{ project: Project; pages: PageMeta[] }> {
       const { name, slug: rawSlug, description = "" } = input;
+      const extra = checkDetails({ group: input.group, status: input.status, repos: input.repos });
       if (typeof name !== "string" || !name.trim() || name.length > MAX_NAME) {
         throw new AppError(422, "invalid_body", `name must be a non-empty string of at most ${MAX_NAME} characters.`);
       }
@@ -359,9 +475,10 @@ export function createService(db: Db, layout: Layout, limits: Limits = DEFAULT_L
           throw new AppError(422, "quota_exceeded", `An account can have at most ${limits.maxProjectsPerUser} projects. Delete one you no longer need first.`);
         }
         const rows = await tx.query<ProjectRow>(
-          `INSERT INTO projects (id, user_id, slug, name, description) VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO projects (id, user_id, slug, name, description, group_name, status, repos)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
            ON CONFLICT (user_id, slug) DO NOTHING RETURNING ${PROJECT_COLS}`,
-          [newId(), userId, slug, name.trim(), description],
+          [newId(), userId, slug, name.trim(), description, extra.group_name ?? "", extra.status ?? "active", JSON.stringify(extra.repos ?? [])],
         );
         const row = rows[0];
         if (!row) throw new AppError(409, "slug_taken", `You already have a project with the slug "${slug}".`);

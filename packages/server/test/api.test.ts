@@ -51,9 +51,12 @@ describe("projects", () => {
       slug: "acme-rebrand",
       name: "Acme Rebrand",
       description: "Rebrand work.",
+      group: "",
+      status: "active",
+      repos: [],
       updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
-    expect(created.pages).toHaveLength(6);
+    expect(created.pages).toHaveLength(8);
     expect(Object.keys(created.pages[0]).sort()).toEqual(["path", "sha256", "size", "updatedAt", "version"]);
 
     const list = await json(await t.api("GET", "/projects"));
@@ -68,6 +71,8 @@ describe("projects", () => {
       "open-questions.md",
       "overview.md",
       "plan.md",
+      "rules.md",
+      "where.md",
     ]);
   });
 
@@ -200,7 +205,9 @@ describe("pages", () => {
       "p/open-questions.md",
       "p/overview.md",
       "p/plan.md",
+      "p/rules.md",
       "p/topics/pricing.md",
+      "p/where.md",
     ]);
     expect(strFromU8(files["p/topics/pricing.md"]!)).toBe("# Pricing ✓\n");
   });

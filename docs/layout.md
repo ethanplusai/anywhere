@@ -13,6 +13,8 @@ current and readable by a person.
 |---|---|
 | `overview.md` | What the project is, who it is for, the goals and the current state. Rewrite it as things change; do not append. |
 | `plan.md` | Where the work stands: the goal, the phases, what is being done now, what comes next and what is blocked. Any agent can pick the work up from here. |
+| `where.md` | Where the work lives and how it fits together: the repositories and folders, where it runs and how a change is deployed, the services it uses (by name, never keys) and how its parts connect. |
+| `rules.md` | How to work on it: conventions, things never to do, who approves or merges what. Link to the project's `CLAUDE.md` or `AGENTS.md` rather than copying them. |
 | `decisions.md` | Decisions, newest first. Each has a date, the decision in one line, and the reason. |
 | `open-questions.md` | Things not yet decided. When one is settled, move it to `decisions.md`. |
 | `ideas.md` | Brainstorm material nobody has committed to. |
@@ -68,15 +70,64 @@ One line: what done looks like.
   `plan.md` and keep only the summary here.
 - Planning and orchestration are up to the agent and the person. Anywhere only keeps the state.
 
+## Where it lives
+
+`where.md` is how an agent finds the code and knows what a change touches. Keep it in this shape,
+and leave out a section that does not apply:
+
+<!-- template: where.md -->
+```markdown
+# Where it lives
+
+## Code
+- Repository: host/owner/name, default branch. Folders on this computer, if it matters.
+
+## Hosting
+- Where it runs, its domains, and how a change reaches production.
+
+## Services
+- Databases, sign-in, email, payments and other services it uses, by name. Never keys.
+
+## How the parts connect
+- Which part calls or depends on which, including other projects.
+```
+
+## Groups, status and repositories
+
+Besides its pages, a project has three details, set with `create_project` and `update_project`:
+
+- **group**: the business or area it belongs to, such as a company, a client list or "Personal".
+  Projects are listed under their group. One business with several products is one group with
+  several projects, not one big project.
+- **status**: `active`, `paused` or `archived`. Pause what nobody is working on; archive what is
+  finished or abandoned. Archived projects are tucked away, not deleted.
+- **repos**: the code repositories that make up the project. A product whose app, website and admin
+  live in separate repositories is still one project with all three listed. In a code folder that
+  is not linked to a project, look the project up by the folder's git remote
+  (`list_projects` with `repo`) before asking the person.
+
 ## Setting up for the first time
 
+People rarely start from nothing: they already have work spread across folders, copies and
+conversations. Setting up is mapping that work into projects with the person, then filling them in.
 When someone says "set up Anywhere" or connects it for the first time with existing work:
 
-1. Ask which projects they want in Anywhere, or, in a coding agent with the skill, list the ones
-   found on their computer and let them choose. Never read files before they agree.
-2. For each project, create it and fill `overview.md`, `plan.md`, `decisions.md` and
-   `open-questions.md` from what already exists: the project's README, `CLAUDE.md`, `AGENTS.md`,
-   plan documents, and what the person tells you. Write only what those sources say.
-3. Start every imported page with the line `> Imported from <sources> on <date>. Check and delete
+1. **Map before reading.** In a coding agent with the skill, run its `map-work` script: it groups
+   folders by repository from folder names, git remotes, session dates and session titles, and reads
+   no file contents. Elsewhere, ask what they work on. Never read a project's files before they
+   confirm the map.
+2. **Projects, not folders.** One project per product or piece of work. Merge every checkout, copy,
+   worktree and renamed folder of a repository into one, and put a product's repositories together.
+   Name it by what it is, not by the folder. Put each project in its group. Suggest leaving out
+   experiments, test runs, generated output and copies of other people's projects.
+3. **Confirm it together.** Show the map with `choose_projects`, each project marked bring in, one
+   line or skip, with a short reason. Wait for their answer and apply every correction they make.
+4. **Fill in what they bring in.** Create each project with its group and repos, then fill
+   `overview.md`, `plan.md`, `where.md`, `rules.md`, `decisions.md` and `open-questions.md` from
+   what already exists: the README, `CLAUDE.md`, `AGENTS.md`, plan documents, deploy settings, and
+   what the person tells you. Write only what those sources say.
+5. **One line for the rest.** For a project marked one line, create it with status `paused`, its
+   group, repos and description, and say in `overview.md` where it lives. Nothing else.
+6. Start every imported page with the line `> Imported from <sources> on <date>. Check and delete
    this line.` so the person knows what to review.
-4. Tell them what was created, one line per project, and what to check first.
+7. Tell them what was created, grouped by business, and what to check first.
