@@ -66,7 +66,7 @@ describe("D2: storage quotas", () => {
   });
 
   it("caps projects per user and pages per project", async () => {
-    const t = await makeTestApp({ ANYWHERE_MAX_PROJECTS: "2", ANYWHERE_MAX_PAGES_PER_PROJECT: "7" });
+    const t = await makeTestApp({ ANYWHERE_MAX_PROJECTS: "2", ANYWHERE_MAX_PAGES_PER_PROJECT: "9" });
     try {
       expect((await t.api("POST", "/projects", { name: "One" })).status).toBe(200);
       expect((await t.api("POST", "/projects", { name: "Two" })).status).toBe(200);
@@ -75,9 +75,9 @@ describe("D2: storage quotas", () => {
       expect(await errorCode(third)).toBe("quota_exceeded");
 
       expect((await t.api("PUT", "/projects/one/pages/topics/a.md", { content: "a", baseVersion: 0 })).status).toBe(200);
-      const seventh = await t.api("PUT", "/projects/one/pages/topics/b.md", { content: "b", baseVersion: 0 });
-      expect(seventh.status).toBe(422);
-      expect(await errorCode(seventh)).toBe("quota_exceeded");
+      const ninth = await t.api("PUT", "/projects/one/pages/topics/b.md", { content: "b", baseVersion: 0 });
+      expect(ninth.status).toBe(422);
+      expect(await errorCode(ninth)).toBe("quota_exceeded");
       // Deleting a page frees its slot.
       await t.api("DELETE", "/projects/one/pages/topics/a.md?baseVersion=1");
       expect((await t.api("PUT", "/projects/one/pages/topics/b.md", { content: "b", baseVersion: 0 })).status).toBe(200);
@@ -188,7 +188,7 @@ describe("D3: memory-bounded reads", () => {
       const res = await t.api("GET", "/projects/huge/export");
       expect(res.status).toBe(200);
       const zip = unzipSync(new Uint8Array(await res.arrayBuffer()));
-      expect(Object.keys(zip)).toHaveLength(count + 6);
+      expect(Object.keys(zip)).toHaveLength(count + 8);
       expect(zip["huge/topics/page-0042.md"]!.length).toBe(pageSize);
       // No query result held more than one export batch (16 pages), against 12 MB in the project.
       expect(probe.max()).toBeLessThanOrEqual(16 * pageSize + 64 * 1024);
@@ -221,7 +221,7 @@ describe("D3: memory-bounded reads", () => {
         service: m.createService(probe.db, (await import("../src/content/layout.js")).loadLayout()),
       }));
       const result = await service.getProjectWithOverview(t.user.id, "wide");
-      expect(result.pages).toHaveLength(106);
+      expect(result.pages).toHaveLength(108);
       expect(result.pages.find((p) => p.path === "topics/page-0001.md")!.firstLine).toBe("z".repeat(200));
       expect(result.overview?.path).toBe("overview.md");
       expect(probe.max()).toBeLessThanOrEqual(105 * 1024 + 256 * 1024);
