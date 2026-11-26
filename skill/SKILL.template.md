@@ -162,11 +162,16 @@ mapping that work into projects together with the person, then filling in the on
      files in its plan folders, its newest `.agents/sessions/` notes, and its deploy settings
      (`vercel.json`, `.vercel/project.json`, `wrangler.toml`, `package.json` scripts), if present.
      In a product with several repositories, read each one's README and agent files.
+   - If the map lists saved agent memory for it (Claude Code's own notes, in a `memory/` folder
+     next to its sessions), read those notes too. They hold rules, preferences and decisions the
+     person's agents were told over time: put rules and preferences in `rules.md` and decisions in
+     `decisions.md`. Leave out notes about other projects or about the agent itself.
    - Fill `overview.md` (what, who for, current state), `where.md` (repositories and folders, hosting
      and domains, services, how the parts connect), `rules.md` (the conventions and limits their
      agent files set, linked rather than copied), `plan.md` (only if there is work in progress with a
      clear next step), `decisions.md` and `open-questions.md`. Write only what the sources say;
-     leave a page as it is when there is nothing for it. Never copy keys, tokens or passwords.
+     leave a page as it is when there is nothing for it. Never copy keys, tokens or passwords: say
+     where a secret is kept instead. Anywhere refuses a page that contains one (`contains_secret`).
    - Start each page you fill with `> Imported from <files> on <YYYY-MM-DD>. Check and delete this line.`
 6. **One line for the rest.** For each project marked one line: `create_project` with status
    `paused`, its group, repos and a one-line description, and a short `overview.md` saying what it is

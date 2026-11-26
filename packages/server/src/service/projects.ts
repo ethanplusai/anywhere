@@ -3,6 +3,7 @@ import { newId, sha256Hex } from "../auth/crypto.js";
 import type { Layout } from "../content/layout.js";
 import { DEFAULT_LIMITS, type Limits } from "../config.js";
 import { AppError } from "./errors.js";
+import { describeSecrets, findSecrets } from "./secrets.js";
 import {
   MAX_PAGE_BYTES,
   STANDARD_PAGES,
@@ -173,24 +174,43 @@ type CheckedDetails = { name?: string; description?: string; group_name?: string
  * Checks the optional details of a project and returns the database values for those given.
  * Repos are normalised and de-duplicated, so any spelling of a remote finds the project.
  */
+/**
+ * Anywhere never stores a key, token or password: pages are shared with every agent a person
+ * connects. The error names what was found and where, never the value.
+ */
+function refuseSecrets(text: string, where: string): void {
+  const found = findSecrets(text);
+  if (!found.length) return;
+  throw new AppError(
+    422,
+    "contains_secret",
+    `${where} looks like it contains a secret: ${describeSecrets(found)}. Anywhere does not store keys, tokens or passwords. ` +
+      `Remove it, or say where it is kept instead (for example "in Vercel environment variables as STRIPE_SECRET_KEY"), and write again.`,
+    { secrets: found },
+  );
+}
+
 function checkDetails(d: ProjectDetails): CheckedDetails {
   const out: CheckedDetails = {};
   if (d.name !== undefined) {
     if (typeof d.name !== "string" || !d.name.trim() || d.name.length > MAX_NAME || hasControl(d.name)) {
       throw new AppError(422, "invalid_body", `name must be a non-empty string of at most ${MAX_NAME} characters.`);
     }
+    refuseSecrets(d.name, "The name");
     out.name = d.name.trim();
   }
   if (d.description !== undefined) {
     if (typeof d.description !== "string" || d.description.length > MAX_DESCRIPTION || hasControl(d.description)) {
       throw new AppError(422, "invalid_body", `description must be a string of at most ${MAX_DESCRIPTION} characters.`);
     }
+    refuseSecrets(d.description, "The description");
     out.description = d.description;
   }
   if (d.group !== undefined) {
     if (typeof d.group !== "string" || d.group.length > MAX_GROUP || hasControl(d.group)) {
       throw new AppError(422, "invalid_body", `group must be a string of at most ${MAX_GROUP} characters.`);
     }
+    refuseSecrets(d.group, "The group");
     out.group_name = d.group.trim();
   }
   if (d.status !== undefined) {
@@ -247,6 +267,7 @@ function checkContent(content: unknown): Buffer {
   if (bytes.length > MAX_PAGE_BYTES) {
     throw new AppError(422, "too_large", `Pages are limited to ${MAX_PAGE_BYTES} bytes; this one would be ${bytes.length}.`);
   }
+  refuseSecrets(content, "This page");
   return bytes;
 }
 
@@ -457,6 +478,8 @@ export function createService(db: Db, layout: Layout, limits: Limits = DEFAULT_L
       if (typeof description !== "string" || description.length > MAX_DESCRIPTION) {
         throw new AppError(422, "invalid_body", `description must be a string of at most ${MAX_DESCRIPTION} characters.`);
       }
+      refuseSecrets(name, "The name");
+      refuseSecrets(description, "The description");
       if (rawSlug !== undefined && typeof rawSlug !== "string") {
         throw new AppError(422, "invalid_slug", "slug must be a string.");
       }

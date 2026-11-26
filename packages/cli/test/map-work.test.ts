@@ -22,8 +22,8 @@ function repo(dir: string, remote: string | null, reflog: "commit" | "clone" = "
   const line = reflog === "clone" ? `clone: from ${remote}` : "commit: work";
   writeFileSync(join(dir, ".git", "logs", "HEAD"), `0000000 1111111 A Person <a@example.com> ${ts} +0000\t${line}\n`);
 }
-function claudeSession(dir: string, cwd: string, title: string, id: string) {
-  const folder = join(home, ".claude", "projects", dir);
+function claudeSession(dir: string, cwd: string, title: string, id: string, config = ".claude") {
+  const folder = join(home, config, "projects", dir);
   mkdirSync(folder, { recursive: true });
   const lines = [
     { type: "user", cwd, message: { role: "user", content: title } },
@@ -52,6 +52,12 @@ beforeAll(() => {
   claudeSession("-home", home, "What should I work on today across everything", "h1");
   claudeSession("-gone", join(projects, "deleted-thing"), "Prototype for an idea that was deleted", "g1");
   claudeSession("-secret", join(projects, "rocket"), "Use key sk-ant-abcdefghijklmnopqrstuvwxyz0123456789 for this test", "k1");
+  // A second Claude Code config folder (a work account, say) and Claude Code's saved memory for a project.
+  claudeSession("-p-rocket", join(projects, "rocket"), "Plan the rocket launch from the work account", "w1", ".claude-work");
+  mkdirSync(join(home, ".claude-work", "memory-not-a-config"), { recursive: true });
+  mkdirSync(join(home, ".claude", "projects", "-p-rocket", "memory"), { recursive: true });
+  writeFileSync(join(home, ".claude", "projects", "-p-rocket", "memory", "MEMORY.md"), "- [Deploys](deploys.md)\n");
+  writeFileSync(join(home, ".claude", "projects", "-p-rocket", "memory", "deploys.md"), "Never deploy on Fridays.\n");
 
   const codex = join(home, ".codex", "sessions", "2026", "11", "20");
   mkdirSync(codex, { recursive: true });
@@ -69,9 +75,9 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-type Repo = { name: string; repo: string | null; checkouts: string[]; hosting: string[]; has: string[]; plans: string[]; titles: string[]; renamed: string | null };
+type Repo = { name: string; repo: string | null; checkouts: string[]; hosting: string[]; has: string[]; plans: string[]; titles: string[]; renamed: string | null; memory: { path: string; notes: number }[] };
 type Product = { owner: string | null; name: string; suggest: string; reason: string; sessions: number; repos: Repo[] };
-type Result = { groups: { owner: string; products: Product[] }[]; setAside: Record<string, unknown> & { generated: Repo[]; others: Repo[]; goneFolders: { path: string }[] } };
+type Result = { read: { claudeConfigs: string[]; codex: string | null }; groups: { owner: string; products: Product[] }[]; setAside: Record<string, unknown> & { generated: Repo[]; others: Repo[]; goneFolders: { path: string }[] } };
 
 function run(...extra: string[]): Result {
   const out = execFileSync(process.execPath, [SCRIPT, "--json", "--roots", join(home, "Projects"), ...extra], {
@@ -96,8 +102,16 @@ describe("map-work", () => {
     expect(main.has).toContain("README.md");
     expect(main.plans).toContain("docs/plans");
     // Claude Code and Codex sessions both count, and enough recent ones suggest bringing it in.
-    expect(rocket.sessions).toBe(7);
+    expect(rocket.sessions).toBe(8);
     expect(rocket.suggest).toBe("bring_in");
+  });
+
+  it("reads every Claude Code config folder and points at the project's saved memory", () => {
+    const r = run();
+    expect(r.read.claudeConfigs).toEqual(["~/.claude", "~/.claude-work"]);
+    const rocket = r.groups.find((g) => g.owner === "github.com/acme")!.products[0]!;
+    const main = rocket.repos.find((x) => x.repo === "github.com/acme/rocket")!;
+    expect(main.memory).toEqual([{ path: "~/.claude/projects/-p-rocket/memory", notes: 2 }]);
   });
 
   it("sets aside generated sites, other people's projects, temp folders and folders that are gone", () => {

@@ -75,13 +75,20 @@ It never conflicts.
 
 `401` missing or bad token. `404` unknown project or page (also used for another user's project).
 `409` as above. `422` validation, with `code` one of `invalid_path`, `invalid_slug`, `too_large`,
-`standard_page`, `invalid_body`, `quota_exceeded`. `429` rate limited, with `Retry-After`; also sent
+`standard_page`, `invalid_body`, `quota_exceeded`, `contains_secret`. `429` rate limited, with `Retry-After`; also sent
 after repeated failed authentication from one address, and when a user has too many requests in
 flight at once (`Retry-After: 1`).
 
 `422 quota_exceeded`: the account is at a storage limit (projects per user, pages per project, or
 total bytes of pages plus kept history). The message says which. Retrying does not help; the user
 must delete something. It applies to `POST /projects`, `PUT` and `POST .../append`.
+
+`422 contains_secret`: the page, or a project's name, description or group, contains something
+shaped like a credential: an API key (Anthropic, OpenAI, Stripe, GitHub, AWS, Google, Slack and
+others), a private key, a JSON web token, a bearer token, a password inside a URL, or a value
+assigned to a name like `API_KEY` or `PASSWORD`. Nothing is saved. The message and
+`secrets: [{ kind, line }]` say what was found and on which line, never the value. Remove it, or
+write where the secret is kept instead, and send again.
 
 ## CLI link file
 

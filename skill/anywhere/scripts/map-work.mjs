@@ -7,7 +7,10 @@
 // It reads, and never changes:
 //   - Claude Code and Codex session files: each session's working folder, its date, and a short
 //     title (the session's own title, or the first line the person typed, cut to 90 characters);
-//     --no-titles leaves titles out;
+//     --no-titles leaves titles out. Claude Code is read from every config folder: CLAUDE_CONFIG_DIR
+//     and any ~/.claude* folder with a projects/ folder in it;
+//   - how many notes Claude Code's own memory keeps for each project (<config>/projects/<folder>/memory/),
+//     counted, not read;
 //   - git: folders containing .git under the roots, and each repository's remote from .git/config;
 //   - the names of a few files in each repository (README.md, CLAUDE.md, AGENTS.md, plan folders)
 //     and where it is hosted (from .vercel/project.json, wrangler, netlify, fly, supabase, Dockerfile).
@@ -195,17 +198,68 @@ function see(rawPath, source, when, title) {
   if (chatFolder(path)) return void (source !== "git" && setAside.chats++);
   if (container(path)) return void (source !== "git" && setAside.loose++);
   if (runFolder(path)) return void (source !== "git" && setAside.runs++);
-  const f = folders.get(path) ?? { path, claude: 0, codex: 0, last: 0, titles: [] };
+  const f = folders.get(path) ?? { path, claude: 0, codex: 0, last: 0, titles: [], memory: [] };
   if (source === "claude") f.claude++;
   if (source === "codex") f.codex++;
   f.last = Math.max(f.last, when || 0);
   if (title && TITLES && f.titles.length < 12 && !f.titles.includes(title)) f.titles.push(title);
   folders.set(path, f);
+  return f;
+}
+
+/**
+ * Every Claude Code config folder: the one CLAUDE_CONFIG_DIR names, and any folder in the home
+ * folder whose name starts with ".claude" and holds a projects/ folder. People keep more than one
+ * (a work and a personal account, or a tool that runs its own), and each has its own sessions.
+ */
+function claudeRoots() {
+  const found = new Map();
+  const add = (dir) => {
+    const projects = join(dir, "projects");
+    if (!existsSync(projects)) return;
+    try {
+      found.set(realpathSync(projects), projects);
+    } catch {
+      /* unreadable */
+    }
+  };
+  if (process.env.CLAUDE_CONFIG_DIR) add(resolve(process.env.CLAUDE_CONFIG_DIR));
+  let names = [];
+  try {
+    names = readdirSync(HOME, { withFileTypes: true });
+  } catch {
+    /* no home listing */
+  }
+  for (const d of names) if (d.isDirectory() && /^\.claude(?:$|[-_.])/.test(d.name)) add(join(HOME, d.name));
+  return [...found.values()];
+}
+const CLAUDE_ROOTS = claudeRoots();
+
+/** Claude Code's own saved memory for a project: markdown notes in <config>/projects/<folder>/memory/. */
+function memoryNotes(dir) {
+  try {
+    return readdirSync(join(dir, "memory")).filter((n) => n.endsWith(".md")).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** The working folder a Claude Code session ran in, from the start of its file. */
+function sessionCwd(file) {
+  for (const line of head(file, 65536).split("\n")) {
+    if (!line.startsWith("{")) continue;
+    try {
+      const d = JSON.parse(line);
+      if (typeof d.cwd === "string") return d.cwd;
+    } catch {
+      /* skip */
+    }
+  }
+  return null;
 }
 
 // Claude Code: one file per session, under a folder named after the working folder.
-const claudeRoot = join(process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude"), "projects");
-if (existsSync(claudeRoot)) {
+for (const claudeRoot of CLAUDE_ROOTS) {
   for (const dir of readdirSync(claudeRoot)) {
     const full = join(claudeRoot, dir);
     let files;
@@ -214,6 +268,7 @@ if (existsSync(claudeRoot)) {
     } catch {
       continue;
     }
+    let folderCwd = null;
     for (const f of files) {
       const file = join(full, f);
       const t = mtime(file);
@@ -239,7 +294,15 @@ if (existsSync(claudeRoot)) {
         }
         if (cwd && title) break;
       }
+      folderCwd ??= cwd;
       see(cwd, "claude", t, title ?? first);
+    }
+    // Saved memory belongs to the project however old its sessions are.
+    const notes = memoryNotes(full);
+    if (notes) {
+      folderCwd ??= files.map((f) => sessionCwd(join(full, f))).find(Boolean) ?? null;
+      const f = see(folderCwd, "memory", 0, null);
+      if (f) f.memory.push({ path: tilde(join(full, "memory")), notes });
     }
   }
 }
@@ -373,7 +436,8 @@ for (const f of folders.values()) {
   }
   const remote = r ? remoteOf(r.config) : null;
   const key = remote ?? `local:${top}`;
-  const e = repos.get(key) ?? { key, repo: remote, folders: new Map(), claude: 0, codex: 0, last: 0, titles: [] };
+  const e = repos.get(key) ?? { key, repo: remote, folders: new Map(), claude: 0, codex: 0, last: 0, titles: [], memory: [] };
+  for (const m of f.memory) if (!e.memory.some((x) => x.path === m.path)) e.memory.push(m);
   const c = e.folders.get(top) ?? { path: top, sessions: 0, last: 0 };
   c.sessions += f.claude + f.codex;
   c.last = Math.max(c.last, f.last);
@@ -446,6 +510,7 @@ const entries = [...repos.values()].map((e) => {
     has,
     plans,
     hosting: hosting(main.path),
+    memory: e.memory,
     titles: e.titles.slice(0, 5),
     _sessions: sessions,
     _last: e.last,
@@ -506,6 +571,10 @@ const groups = [...byOwner.values()]
 const strip = ({ _sessions, _last, ...r }) => r;
 const result = {
   since: day(SINCE),
+  read: {
+    claudeConfigs: CLAUDE_ROOTS.map((r) => tilde(dirname(r))),
+    codex: existsSync(codexRoot) ? tilde(dirname(codexRoot)) : null,
+  },
   groups,
   setAside: {
     generated: entries.filter((r) => r.kind === "generated").map(strip),
@@ -526,8 +595,9 @@ if (args.includes("--json")) {
   for (const p of productList) counts[p.suggest]++;
   console.log(
     `Work found since ${result.since}: ${n} likely projects in ${groups.length} groups (by repository owner). ` +
-      `Suggested: ${counts.bring_in} to bring in, ${counts.brief} as one line, ${counts.skip} to skip. A draft to confirm with the person.\n`,
+      `Suggested: ${counts.bring_in} to bring in, ${counts.brief} as one line, ${counts.skip} to skip. A draft to confirm with the person.`,
   );
+  console.log(`Read sessions from: ${[...result.read.claudeConfigs, result.read.codex].filter(Boolean).join(", ") || "nothing found"}\n`);
   for (const g of groups) {
     console.log(`## ${g.owner}  (${g.sessions} sessions)`);
     const old = g.products.filter((p) => p.suggest === "skip");
@@ -542,6 +612,7 @@ if (args.includes("--json")) {
           r.hosting.length && r.hosting.join(", "),
           full && r.has.length && `has ${r.has.join(", ")}`,
           full && r.plans.length && `plans in ${r.plans.join(", ")}`,
+          full && r.memory.length && `saved agent memory: ${r.memory.map((m) => `${m.notes} notes in ${m.path}`).join(", ")}`,
           r.linked && "linked to Anywhere",
         ].filter(Boolean);
         console.log(`    ${bits.join(" · ")}`);

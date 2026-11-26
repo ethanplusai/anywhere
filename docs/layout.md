@@ -32,7 +32,8 @@ current and readable by a person.
 4. Keep entries short. Write the conclusion and the reason, not the conversation.
 5. Date entries as `YYYY-MM-DD`.
 6. Store what a different agent would need tomorrow: decisions, constraints, preferences, names,
-   current state, next steps. Do not store secrets, passwords, API keys or transcripts.
+   current state, next steps. Do not store secrets, passwords, API keys or transcripts: say where a
+   secret is kept instead. Anywhere refuses a write that contains one.
 7. After writing, tell the person which page you changed.
 8. If a write is refused because the page changed, read the current version, merge your change into
    it, and write again.
@@ -124,7 +125,8 @@ When someone says "set up Anywhere" or connects it for the first time with exist
    line or skip, with a short reason. Wait for their answer and apply every correction they make.
 4. **Fill in what they bring in.** Create each project with its group and repos, then fill
    `overview.md`, `plan.md`, `where.md`, `rules.md`, `decisions.md` and `open-questions.md` from
-   what already exists: the README, `CLAUDE.md`, `AGENTS.md`, plan documents, deploy settings, and
+   what already exists: the README, `CLAUDE.md`, `AGENTS.md`, plan documents, deploy settings, the
+   notes the person's agents saved for that project (such as Claude Code's memory), and
    what the person tells you. Write only what those sources say.
 5. **One line for the rest.** For a project marked one line, create it with status `paused`, its
    group, repos and description, and say in `overview.md` where it lives. Nothing else.

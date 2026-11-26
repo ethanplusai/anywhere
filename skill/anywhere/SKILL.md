@@ -125,7 +125,8 @@ current and readable by a person.
 4. Keep entries short. Write the conclusion and the reason, not the conversation.
 5. Date entries as `YYYY-MM-DD`.
 6. Store what a different agent would need tomorrow: decisions, constraints, preferences, names,
-   current state, next steps. Do not store secrets, passwords, API keys or transcripts.
+   current state, next steps. Do not store secrets, passwords, API keys or transcripts: say where a
+   secret is kept instead. Anywhere refuses a write that contains one.
 7. After writing, tell the person which page you changed.
 8. If a write is refused because the page changed, read the current version, merge your change into
    it, and write again.
@@ -217,7 +218,8 @@ When someone says "set up Anywhere" or connects it for the first time with exist
    line or skip, with a short reason. Wait for their answer and apply every correction they make.
 4. **Fill in what they bring in.** Create each project with its group and repos, then fill
    `overview.md`, `plan.md`, `where.md`, `rules.md`, `decisions.md` and `open-questions.md` from
-   what already exists: the README, `CLAUDE.md`, `AGENTS.md`, plan documents, deploy settings, and
+   what already exists: the README, `CLAUDE.md`, `AGENTS.md`, plan documents, deploy settings, the
+   notes the person's agents saved for that project (such as Claude Code's memory), and
    what the person tells you. Write only what those sources say.
 5. **One line for the rest.** For a project marked one line, create it with status `paused`, its
    group, repos and description, and say in `overview.md` where it lives. Nothing else.
@@ -289,11 +291,16 @@ mapping that work into projects together with the person, then filling in the on
      files in its plan folders, its newest `.agents/sessions/` notes, and its deploy settings
      (`vercel.json`, `.vercel/project.json`, `wrangler.toml`, `package.json` scripts), if present.
      In a product with several repositories, read each one's README and agent files.
+   - If the map lists saved agent memory for it (Claude Code's own notes, in a `memory/` folder
+     next to its sessions), read those notes too. They hold rules, preferences and decisions the
+     person's agents were told over time: put rules and preferences in `rules.md` and decisions in
+     `decisions.md`. Leave out notes about other projects or about the agent itself.
    - Fill `overview.md` (what, who for, current state), `where.md` (repositories and folders, hosting
      and domains, services, how the parts connect), `rules.md` (the conventions and limits their
      agent files set, linked rather than copied), `plan.md` (only if there is work in progress with a
      clear next step), `decisions.md` and `open-questions.md`. Write only what the sources say;
-     leave a page as it is when there is nothing for it. Never copy keys, tokens or passwords.
+     leave a page as it is when there is nothing for it. Never copy keys, tokens or passwords: say
+     where a secret is kept instead. Anywhere refuses a page that contains one (`contains_secret`).
    - Start each page you fill with `> Imported from <files> on <YYYY-MM-DD>. Check and delete this line.`
 6. **One line for the rest.** For each project marked one line: `create_project` with status
    `paused`, its group, repos and a one-line description, and a short `overview.md` saying what it is

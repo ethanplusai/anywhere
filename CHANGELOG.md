@@ -19,6 +19,12 @@ All notable changes to this project are recorded here. The format follows [Keep 
   lists projects under their group and tucks archived ones away.
 - Two new standard pages: `where.md` (repositories, hosting, services and how the parts connect)
   and `rules.md` (how to work on the project).
+- The setting-up map reads every Claude Code config folder (`CLAUDE_CONFIG_DIR` and any
+  `~/.claude*` folder with sessions), not only `~/.claude`, and lists each project's saved agent
+  memory so setting up can fill `rules.md` and `decisions.md` from it.
+- Anywhere refuses to store secrets. A page, append or project detail that contains an API key,
+  private key, JSON web token, bearer token, password in a URL or a value assigned to a secret name
+  is refused with `422 contains_secret`, naming the kind and line but never the value.
 
 ## [0.1.0] - Unreleased
 
