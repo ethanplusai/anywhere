@@ -25,7 +25,7 @@ export const INSTRUCTIONS = [
   "",
   "Keep plan.md current (Goal, Phases, Now, Next, Blocked) as work progresses, so any agent can pick it up.",
   "",
-  "Call guide once for the full layout and rules. Standard pages: overview.md (what, who, goals, current state; rewrite it), plan.md (where the work stands and what is next), decisions.md (dated decisions with reasons, newest first), open-questions.md, ideas.md, log.md (append only), and topics/<slug>.md for subjects that outgrow those. Keep entries short and dated YYYY-MM-DD. Never store secrets.",
+  "Call guide once for the full layout and rules. Standard pages: overview.md (what, who, goals, current state; rewrite it), plan.md (where the work stands and what is next), where.md (code, hosting, services and how the parts connect), rules.md (how to work on it), decisions.md (dated decisions with reasons, newest first), open-questions.md, ideas.md, log.md (append only), and topics/<slug>.md for subjects that outgrow those. Keep entries short and dated YYYY-MM-DD. Never store secrets.",
 ].join(" ");
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
@@ -81,6 +81,16 @@ async function attempt(fn: () => Promise<string>): Promise<CallToolResult> {
   }
 }
 
+/** One line about a project for tool text: slug, name, group, status, description, repos, update. */
+function projectLine(p: { slug: string; name: string; description: string; group: string; status: string; repos: string[]; updatedAt: string }): string {
+  const parts = [`${p.slug}: ${p.name}${p.description ? ` (${p.description})` : ""}`];
+  if (p.group) parts.push(`group ${p.group}`);
+  if (p.status !== "active") parts.push(p.status);
+  if (p.repos.length) parts.push(`repos ${p.repos.join(", ")}`);
+  parts.push(`updated ${p.updatedAt}`);
+  return parts.join(", ");
+}
+
 function pageHeader(p: { path: string; version: number; size: number; updatedAt: string }): string {
   return `${p.path}, version ${p.version} (${p.size} bytes, updated ${p.updatedAt})`;
 }
@@ -122,7 +132,16 @@ export function buildMcpServer(
         const data: BoardPanelData = {
           kind: "board",
           url: baseUrl ? `${baseUrl}/projects` : null,
-          projects: projects.map((p) => ({ name: p.name, slug: p.slug, description: p.description ?? "", pages: p.pages, updatedAt: p.updatedAt, lastBy: who(p.lastActor) })),
+          projects: projects.map((p) => ({
+            name: p.name,
+            slug: p.slug,
+            description: p.description ?? "",
+            group: p.group,
+            status: p.status,
+            pages: p.pages,
+            updatedAt: p.updatedAt,
+            lastBy: who(p.lastActor),
+          })),
           recent: recent.map((r) => ({
             project: r.project,
             projectName: r.projectName,
@@ -133,7 +152,7 @@ export function buildMcpServer(
           })),
         };
         const listed = projects.length
-          ? asData("project names and descriptions", projects.map((p) => `- ${p.slug}: ${p.name}${p.description ? ` (${p.description})` : ""}, ${p.pages} pages, updated ${p.updatedAt}`).join("\n"))
+          ? asData("project names and descriptions", projects.map((p) => `- ${projectLine(p)}, ${p.pages} pages`).join("\n"))
           : "No projects yet. Offer to set Anywhere up.";
         return {
           content: [{ type: "text", text: `The person's projects were shown to them, ${SHOWN}. If they do not seem to see them, present this list instead:\n${listed}` }],
@@ -218,23 +237,29 @@ export function buildMcpServer(
   server.registerTool(
     "choose_projects",
     {
-      title: "Let the person choose projects to bring in",
+      title: "Show the person a map of their work to confirm",
       description:
-        "Shows the person a checklist of projects to bring into Anywhere, when setting up. Pass the projects you found (from the skill's find-projects script, or from what they told you), most recent first; group repositories of one product with the same group. Then stop and wait: their choice arrives as their next message. In apps that cannot draw the checklist, list the projects yourself and ask which to bring in. Names and paths you pass are shown as plain text.",
+        "Shows the person a map of the projects you found, grouped by business, so they can confirm what Anywhere keeps before anything is read. Use it when setting up. Pass one entry per project, not per folder: merge every checkout, copy and worktree of a repository into one entry, and put the repositories of one product (its app, website, admin) in one entry. Give each a suggestion: bring_in for work they are doing now, brief for things that are paused (a one-line entry), skip for experiments, copies of other people's projects and generated output. Say why in reason. Then stop and wait: their answer, with any corrections, arrives as their next message. In apps that cannot draw the map, present it as a short grouped list and ask them to confirm or correct it. Names and paths you pass are shown as plain text.",
       inputSchema: {
         candidates: z
           .array(
             z.object({
-              name: z.string().min(1).max(120).describe("What to call the project."),
-              path: z.string().max(300).optional().describe("Its folder, shown under the name."),
+              name: z.string().min(1).max(120).describe("What to call the project, by what it is (the product name), not the folder name."),
+              group: z.string().max(80).optional().describe("The business or group it belongs to, such as a company name or Personal."),
+              description: z.string().max(200).optional().describe("One line: what it is."),
+              repos: z.array(z.string().max(200)).max(20).optional().describe("Its repositories, as host/owner/name."),
+              path: z.string().max(300).optional().describe("Its main folder on this computer."),
+              checkouts: z.number().int().min(0).max(999).optional().describe("How many folders on this computer hold a copy of it."),
               last_active: z.string().max(40).optional().describe("When it was last worked on, as an ISO date."),
-              note: z.string().max(160).optional().describe("One short fact, such as which of README, CLAUDE.md or plans it has."),
-              group: z.string().max(80).optional().describe("A product name, to list related folders together."),
+              suggest: z.enum(["bring_in", "brief", "skip"]).optional().describe("What you suggest: bring_in (fully), brief (one line), or skip."),
+              reason: z.string().max(160).optional().describe("Why, in a few words, such as \"52 sessions this month\" or \"a fork of someone else's project\"."),
+              existing: z.string().max(64).optional().describe("The slug, if it is already in Anywhere."),
+              note: z.string().max(160).optional().describe("One more short fact, such as where it is hosted."),
             }),
           )
           .min(1)
-          .max(60)
-          .describe("The projects to offer, most recent first."),
+          .max(80)
+          .describe("The projects, grouped by group and most recent first within each."),
       },
       annotations: READ,
       _meta: PANEL,
@@ -243,15 +268,18 @@ export function buildMcpServer(
       try {
         const existing = (await service.listProjects(userId)).map((p) => ({ slug: p.slug, name: p.name }));
         const data: PickerPanelData = { kind: "picker", candidates, existing };
-        const listed = candidates.map((c) => `- ${c.name}${c.path ? ` (${c.path})` : ""}`).join("\n");
+        const label = { bring_in: "bring in", brief: "brief", skip: "skip" } as const;
+        const listed = candidates
+          .map((c) => `- ${c.group ? `${c.group} / ` : ""}${c.name}${c.suggest ? `: ${label[c.suggest]}` : ""}${c.reason ? ` (${c.reason})` : ""}`)
+          .join("\n");
         return {
           content: [
             {
               type: "text",
               text: [
-                `A checklist of ${candidates.length} project${candidates.length === 1 ? "" : "s"} was shown to the person, if their app can draw it. Stop here and wait for their reply; their choice arrives as their next message. If they answer without having seen a checklist, list these and ask which to bring in:`,
+                `A map of ${candidates.length} project${candidates.length === 1 ? "" : "s"} was shown to the person, if their app can draw it. Stop here and wait for their reply; their choices and corrections arrive as their next message. If they answer without having seen a map, show them this list and ask them to confirm or correct it:`,
                 listed,
-                existing.length ? `Already in Anywhere, so do not create them again: ${existing.map((p) => p.slug).join(", ")}.` : "Nothing is in Anywhere yet.",
+                existing.length ? `Already in Anywhere, so update them rather than creating them again: ${existing.map((p) => p.slug).join(", ")}.` : "Nothing is in Anywhere yet.",
               ].join("\n"),
             },
           ],
@@ -279,17 +307,21 @@ export function buildMcpServer(
     {
       title: "List projects",
       description:
-        "Lists the person's Anywhere projects with slug, name, one-line description and last update. Use it to find the slug when the person names a project, and before create_project so you do not make a duplicate.",
+        "Lists the person's Anywhere projects with slug, name, group, status, description, repositories and last update. Use it to find the slug when the person names a project, and before create_project so you do not make a duplicate. In a code folder with no .anywhere link, pass the folder's git remote as repo to find the project it belongs to.",
+      inputSchema: {
+        repo: z.string().max(300).optional().describe("Only projects made up of this repository: a git remote URL or host/owner/name."),
+      },
       annotations: READ,
     },
-    async () =>
+    async ({ repo }) =>
       attempt(async () => {
-        const projects = await service.listProjects(userId);
-        if (projects.length === 0) return "No projects yet. Create one with create_project.";
-        return asData(
-          "project names and descriptions",
-          projects.map((p) => `- ${p.slug}: ${p.name}${p.description ? ` (${p.description})` : ""}, updated ${p.updatedAt}`).join("\n"),
-        );
+        const projects = await service.listProjects(userId, repo === undefined ? {} : { repo });
+        if (projects.length === 0) {
+          return repo === undefined
+            ? "No projects yet. Create one with create_project."
+            : "No project lists that repository. Ask the person which project this folder belongs to, then add the repository to it with update_project.";
+        }
+        return asData("project names and descriptions", projects.map((p) => `- ${projectLine(p)}`).join("\n"));
       }),
   );
 
@@ -298,21 +330,51 @@ export function buildMcpServer(
     {
       title: "Create a project",
       description:
-        "Creates a project with the standard pages overview.md, plan.md, decisions.md, open-questions.md, ideas.md and log.md. Check list_projects first so you do not make a duplicate. The slug is derived from the name unless given ([a-z0-9-], up to 64). Afterwards write what you know into overview.md (read it first for its version) and tell the person.",
+        "Creates a project with the standard pages overview.md, plan.md, where.md, rules.md, decisions.md, open-questions.md, ideas.md and log.md. Check list_projects first so you do not make a duplicate. The slug is derived from the name unless given ([a-z0-9-], up to 64). Give the group (the business it belongs to) and its repositories when you know them. Afterwards write what you know into overview.md (read it first for its version) and tell the person.",
       inputSchema: {
         name: z.string().describe("Human name, e.g. Acme rebrand."),
         slug: z.string().optional().describe("Optional slug, [a-z0-9-], 1-64 characters."),
         description: z.string().optional().describe("Optional one-line description."),
+        group: z.string().max(80).optional().describe("The business or group it belongs to, such as a company name or Personal."),
+        status: z.enum(["active", "paused", "archived"]).optional().describe("active (the default), paused or archived."),
+        repos: z.array(z.string().max(300)).max(20).optional().describe("Its code repositories: git remote URLs or host/owner/name."),
       },
       annotations: WRITE,
     },
-    async ({ name, slug, description }) =>
+    async ({ name, slug, description, group, status, repos }) =>
       attempt(async () => {
-        const input: { name: string; slug?: string; description?: string } = { name };
+        const input: Parameters<Service["createProject"]>[1] = { name };
         if (slug !== undefined) input.slug = slug;
         if (description !== undefined) input.description = description;
+        if (group !== undefined) input.group = group;
+        if (status !== undefined) input.status = status;
+        if (repos !== undefined) input.repos = repos;
         const { project: p, pages } = await service.createProject(userId, input, actor);
         return `Created project ${p.slug} ("${p.name}") with pages: ${pages.map((x) => `${x.path} (version ${x.version})`).join(", ")}.`;
+      }),
+  );
+
+  server.registerTool(
+    "update_project",
+    {
+      title: "Change a project's details",
+      description:
+        "Changes a project's name, one-line description, group (the business it belongs to), status (active, paused or archived) or repositories. Use it when the person reorganises their work, pauses or archives a project, or when you find the project for a folder and its repository is not listed yet. repos replaces the whole list, so read it from list_projects first and pass every repository to keep. Pages are not changed.",
+      inputSchema: {
+        project,
+        name: z.string().max(200).optional().describe("New name."),
+        description: z.string().max(1000).optional().describe("New one-line description."),
+        group: z.string().max(80).optional().describe("The business or group it belongs to; an empty string removes it."),
+        status: z.enum(["active", "paused", "archived"]).optional(),
+        repos: z.array(z.string().max(300)).max(20).optional().describe("The full list of its repositories."),
+      },
+      annotations: { ...WRITE, idempotentHint: true },
+    },
+    async ({ project: slug, ...details }) =>
+      attempt(async () => {
+        const given = Object.fromEntries(Object.entries(details).filter(([, v]) => v !== undefined));
+        const p = await service.updateProject(userId, slug, given);
+        return `Updated ${p.slug}: ${projectLine(p)}`;
       }),
   );
 
@@ -427,7 +489,7 @@ export function buildMcpServer(
     {
       title: "Delete a page",
       description:
-        "Deletes a page that should not exist, such as a duplicate topic page (merge its content elsewhere first). Needs base_version = the version you last read. The standard pages (overview.md, decisions.md, open-questions.md, ideas.md, log.md) cannot be deleted; empty them with write_page instead.",
+        "Deletes a page that should not exist, such as a duplicate topic page (merge its content elsewhere first). Needs base_version = the version you last read. The standard pages (overview.md, plan.md, where.md, rules.md, decisions.md, open-questions.md, ideas.md, log.md) cannot be deleted; empty them with write_page instead.",
       inputSchema: { project, path, base_version: z.number().int().min(1).describe("The version you last read.") },
       annotations: { ...WRITE, destructiveHint: true },
     },

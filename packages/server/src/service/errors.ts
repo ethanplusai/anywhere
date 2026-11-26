@@ -11,7 +11,8 @@ export type ErrorCode =
   | "rate_limited"
   | "email_taken"
   | "forbidden"
-  | "quota_exceeded";
+  | "quota_exceeded"
+  | "contains_secret";
 
 /** An error the HTTP API, MCP tools and web pages all know how to present. */
 export class AppError extends Error {

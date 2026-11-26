@@ -4,13 +4,15 @@
 storing, how to resolve a conflict, and the `anywr pull` / `anywr push` routine for linked folders.
 It works with the MCP tools alone when nothing is linked.
 
-It also carries `scripts/find-projects.mjs`, which the "set up Anywhere" flow runs (with the
-person's agreement) to list their projects from Claude Code sessions, Codex sessions and git folders.
-It reads folder names, file dates and each session's working folder only, never conversation or file
-content:
+It also carries `scripts/map-work.mjs`, which the "set up Anywhere" flow runs (with the person's
+agreement) to draft a map of the work already on their computer. It groups every checkout, copy and
+worktree of a repository into one entry, groups repositories by owner and product, and sets aside
+temporary folders, test runs, generated output and other people's projects. It reads folder names,
+git remotes, each session's working folder, date and title (`--no-titles` leaves titles out), and
+the names of a project's docs and deploy files, never file or full conversation content:
 
 ```bash
-node skill/anywhere/scripts/find-projects.mjs --days 180
+node skill/anywhere/scripts/map-work.mjs
 ```
 
 ## Install

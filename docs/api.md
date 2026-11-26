@@ -14,7 +14,10 @@ type Project = {
   slug: string;          // unique per user, [a-z0-9-], 1-64 chars
   name: string;
   description: string;
-  updatedAt: string;     // ISO 8601, latest change to the project or any page
+  group: string;         // the business or group it belongs to, "" when none, at most 80 chars
+  status: "active" | "paused" | "archived";
+  repos: string[];       // its code repositories, each "host/owner/name" in lowercase
+  updatedAt: string;     // ISO 8601, latest change to the project, its details or any page
 };
 
 type PageMeta = {
@@ -38,8 +41,9 @@ Maximum page size 256 KiB.
 | Method and path | Body | 200 response | Errors |
 |---|---|---|---|
 | `GET /me` | | `{ user: { id, email } }` | 401 |
-| `GET /projects` | | `{ projects: Project[] }` | 401 |
-| `POST /projects` | `{ name, slug?, description? }` | `{ project: Project, pages: PageMeta[] }` (standard pages created) | 409 `slug_taken`, 422 |
+| `GET /projects?repo=<remote>` | | `{ projects: Project[] }`, only those listing that repository when `repo` is given | 401, 422 |
+| `POST /projects` | `{ name, slug?, description?, group?, status?, repos? }` | `{ project: Project, pages: PageMeta[] }` (standard pages created) | 409 `slug_taken`, 422 |
+| `PATCH /projects/:slug` | any of `{ name, description, group, status, repos }` | `{ project: Project }` | 404, 422 |
 | `GET /projects/:slug` | | `{ project: Project, pages: PageMeta[] }` | 404 |
 | `GET /projects/:slug/pages/*path` | | `{ page: Page }` | 404 |
 | `PUT /projects/:slug/pages/*path` | `{ content, baseVersion }` | `{ page: PageMeta }` | 409 `version_conflict`, 422 |
@@ -71,13 +75,20 @@ It never conflicts.
 
 `401` missing or bad token. `404` unknown project or page (also used for another user's project).
 `409` as above. `422` validation, with `code` one of `invalid_path`, `invalid_slug`, `too_large`,
-`standard_page`, `invalid_body`, `quota_exceeded`. `429` rate limited, with `Retry-After`; also sent
+`standard_page`, `invalid_body`, `quota_exceeded`, `contains_secret`. `429` rate limited, with `Retry-After`; also sent
 after repeated failed authentication from one address, and when a user has too many requests in
 flight at once (`Retry-After: 1`).
 
 `422 quota_exceeded`: the account is at a storage limit (projects per user, pages per project, or
 total bytes of pages plus kept history). The message says which. Retrying does not help; the user
 must delete something. It applies to `POST /projects`, `PUT` and `POST .../append`.
+
+`422 contains_secret`: the page, or a project's name, description or group, contains something
+shaped like a credential: an API key (Anthropic, OpenAI, Stripe, GitHub, AWS, Google, Slack and
+others), a private key, a JSON web token, a bearer token, a password inside a URL, or a value
+assigned to a name like `API_KEY` or `PASSWORD`. Nothing is saved. The message and
+`secrets: [{ kind, line }]` say what was found and on which line, never the value. Remove it, or
+write where the secret is kept instead, and send again.
 
 ## CLI link file
 
@@ -104,8 +115,8 @@ These are binding for both sides.
 - A page path matches `^[a-z0-9][a-z0-9-]{0,62}(/[a-z0-9][a-z0-9-]{0,62})?\.md$`. So the final
   segment is a name plus `.md`, with no other dots. `overview.remote.md` is therefore not a valid
   page path, which keeps the CLI's conflict files out of sync.
-- The standard pages are exactly `overview.md`, `plan.md`, `decisions.md`, `open-questions.md`,
-  `ideas.md` and `log.md`. They cannot be deleted. They can be emptied. A project made before a
+- The standard pages are exactly `overview.md`, `plan.md`, `where.md`, `rules.md`, `decisions.md`,
+  `open-questions.md`, `ideas.md` and `log.md`. They cannot be deleted. They can be emptied. A project made before a
   standard page existed gets it, from its template, the first time the project is opened.
 - `*path` in URLs is the path with `/` left as-is and nothing else needing encoding.
 - Content is stored and hashed as the exact UTF-8 bytes sent. Nothing is normalised: no line-ending
@@ -133,7 +144,11 @@ These are binding for both sides.
 - `slug` is optional on create. Without it the server derives one from the name (lowercase, runs of
   other characters become `-`, trimmed to 64). If the result is taken, the answer is 409
   `slug_taken`; the server does not invent a suffix.
-- `description` defaults to the empty string.
+- `description` and `group` default to the empty string, `status` to `active`, `repos` to `[]`.
+- A repository may be sent in any form a git remote takes (`git@github.com:Owner/Name.git`,
+  `https://github.com/Owner/Name`, `github.com/owner/name`). It is stored as `host/owner/name` in
+  lowercase, duplicates dropped, at most 20. `GET /projects?repo=` accepts the same forms, so an
+  agent can pass a folder's remote as it is. `PATCH` replaces `repos` as a whole.
 - Standard pages are created with a level-one heading and one line of italic guidance each, taken
   from `docs/layout.md`. They are ordinary pages at version 1.
 - The export zip has pages at their paths under a single top-level folder named after the slug, and

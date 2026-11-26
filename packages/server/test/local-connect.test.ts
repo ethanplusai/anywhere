@@ -89,7 +89,7 @@ describe("connecting Claude Code", () => {
     ]);
     const skill = readFileSync(join(userHome, ".claude", "skills", "anywhere", "SKILL.md"), "utf8");
     expect(skill).toContain("name: anywhere");
-    expect(existsSync(join(userHome, ".claude", "skills", "anywhere", "scripts", "find-projects.mjs"))).toBe(true);
+    expect(existsSync(join(userHome, ".claude", "skills", "anywhere", "scripts", "map-work.mjs"))).toBe(true);
     expect(connector.status("claude").skill).toBe(true);
   });
 

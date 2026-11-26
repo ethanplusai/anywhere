@@ -149,7 +149,7 @@ describe("onboarding", () => {
     const { gunzipSync, strFromU8 } = await import("fflate");
     const tar = strFromU8(gunzipSync(new Uint8Array(await res.arrayBuffer())), true);
     expect(tar).toContain("anywhere/SKILL.md");
-    expect(tar).toContain("anywhere/scripts/find-projects.mjs");
+    expect(tar).toContain("anywhere/scripts/map-work.mjs");
     expect(tar).toContain("name: anywhere");
   });
 });

@@ -50,14 +50,27 @@ export function apiRoutes(deps: Deps): Hono<Env> {
     return c.json({ user: rows[0] });
   });
 
-  api.get("/projects", async (c) => c.json({ projects: await service.listProjects(c.get("userId")) }));
+  api.get("/projects", async (c) => {
+    const repo = c.req.query("repo");
+    return c.json({ projects: await service.listProjects(c.get("userId"), repo === undefined ? {} : { repo }) });
+  });
 
   api.post("/projects", async (c) => {
     const body = await readJsonObject(c);
-    const input: { name: unknown; slug?: unknown; description?: unknown } = { name: body.name };
-    if (body.slug !== undefined) input.slug = body.slug;
-    if (body.description !== undefined) input.description = body.description;
+    const input: Parameters<typeof service.createProject>[1] = { name: body.name };
+    for (const key of ["slug", "description", "group", "status", "repos"] as const) {
+      if (body[key] !== undefined) input[key] = body[key];
+    }
     return c.json(await service.createProject(c.get("userId"), input, c.get("actor")));
+  });
+
+  api.patch("/projects/:slug", async (c) => {
+    const body = await readJsonObject(c);
+    const details: Record<string, unknown> = {};
+    for (const key of ["name", "description", "group", "status", "repos"] as const) {
+      if (body[key] !== undefined) details[key] = body[key];
+    }
+    return c.json({ project: await service.updateProject(c.get("userId"), c.req.param("slug"), details) });
   });
 
   // Proposed contract addition (audit D5): deleting a whole project needs ?confirm=<slug>, so a

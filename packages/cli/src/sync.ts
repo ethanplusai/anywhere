@@ -4,7 +4,7 @@ export type RecordEntry = { version: number; sha256: string; mergeBase?: number 
 export type RemoteMeta = { version: number; sha256: string };
 
 const PAGE_PATH = /^[a-z0-9][a-z0-9-]{0,62}(\/[a-z0-9][a-z0-9-]{0,62})?\.md$/;
-const STANDARD = new Set(["overview.md", "plan.md", "decisions.md", "open-questions.md", "ideas.md", "log.md"]);
+const STANDARD = new Set(["overview.md", "plan.md", "where.md", "rules.md", "decisions.md", "open-questions.md", "ideas.md", "log.md"]);
 
 export const isPagePath = (p: string): boolean => PAGE_PATH.test(p);
 export const isStandardPage = (p: string): boolean => STANDARD.has(p);

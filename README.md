@@ -65,6 +65,8 @@ Every project is the same small set of pages, so a chat agent and a coding agent
 | --- | --- |
 | `overview.md` | What the project is, who it is for, the goals and the current state. Every agent reads it first. |
 | `plan.md` | Where the work stands: the goal, the phases, what is happening now, what is next and what is blocked. |
+| `where.md` | Where it lives: the code, where it runs and how it is deployed, the services it uses and how the parts connect. |
+| `rules.md` | How to work on it: conventions, what never to do and who approves what. |
 | `decisions.md` | Decisions, newest first, each with a date and the reason. |
 | `open-questions.md` | What is still undecided. Settled questions move to decisions. |
 | `ideas.md` | Brainstorms nobody has committed to. |
@@ -202,7 +204,8 @@ For your own server, use `BASE_URL/mcp` (or `ANYWHERE_MCP_ORIGIN/mcp` if you gav
 | --- | --- |
 | `guide` | How projects are organised and the rules for writing, from [docs/layout.md](docs/layout.md). |
 | `list_projects` | Your projects, most recently changed first. |
-| `create_project` | A new project with its six standard pages. |
+| `create_project` | A new project with its standard pages, its group and its repositories. |
+| `update_project` | Rename a project, move it to another group, pause or archive it, or list its repositories. |
 | `get_project` | A project's pages with their first lines, and `overview.md` in full. |
 | `resume` | A short briefing to carry on: current state, the plan's Now and Next, recent decisions, open questions and who changed what. |
 | `read_page` | One page and its version. |

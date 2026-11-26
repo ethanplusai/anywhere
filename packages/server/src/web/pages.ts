@@ -42,6 +42,8 @@ const WEB = "web";
 const DESCRIPTIONS: Record<string, string> = {
   "overview.md": "What the project is, who it is for and where it stands.",
   "plan.md": "Where the work stands: the goal, the phases, what is happening now and what comes next.",
+  "where.md": "Where the code lives, where it runs, the services it uses and how the parts connect.",
+  "rules.md": "How to work on it: conventions, what never to do and who approves what.",
   "decisions.md": "What was decided, when and why. Newest first.",
   "open-questions.md": "What is still undecided.",
   "ideas.md": "Brainstorms nobody has committed to.",
@@ -58,7 +60,7 @@ const FLASHES: Record<string, Flash> = {
   created: { kind: "ok", text: "Page created." },
   restored: { kind: "ok", text: "Restored. The old content is now the newest version." },
   "page-deleted": { kind: "ok", text: "Page deleted." },
-  "project-created": { kind: "ok", text: "Project created with its six standard pages. Ask an agent to fill them in, or edit them here." },
+  "project-created": { kind: "ok", text: "Project created with its standard pages. Ask an agent to fill them in, or edit them here." },
 };
 
 function str(v: unknown): string {
@@ -196,7 +198,7 @@ export function registerPageRoutes(app: Hono<WebEnv>, deps: Deps, h: ViewHelpers
       "New project",
       html`<div class="settings-body">
         <div class="crumbs"><a href="/projects">Projects</a> /</div>
-        <div class="head"><div><h1>New project</h1><p>It starts with the six standard pages. Agents usually create projects themselves when you ask them to.</p></div></div>
+        <div class="head"><div><h1>New project</h1><p>It starts with the standard pages. Agents usually create projects themselves when you ask them to.</p></div></div>
         ${flash(opts.error ? { kind: "error", text: opts.error } : null)}
         <form method="post" action="/projects" class="card">
           ${h.csrfField(c)}

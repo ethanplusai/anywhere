@@ -46,16 +46,16 @@ describe("MCP endpoint", () => {
     expect(client.getServerVersion()?.name).toBe("anywhere");
   });
 
-  it("lists the fourteen tools with read-only hints on the read tools", async () => {
+  it("lists the fifteen tools with read-only hints on the read tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((x) => x.name).sort()).toEqual(
-      ["append_to_page", "choose_projects", "create_project", "delete_page", "get_project", "guide", "list_projects", "read_page", "resume", "search", "show_page", "show_project", "show_projects", "write_page"],
+      ["append_to_page", "choose_projects", "create_project", "delete_page", "get_project", "guide", "list_projects", "read_page", "resume", "search", "show_page", "show_project", "show_projects", "update_project", "write_page"],
     );
     const byName = Object.fromEntries(tools.map((x) => [x.name, x]));
     for (const name of ["guide", "list_projects", "get_project", "read_page", "resume", "search", "show_project", "show_projects", "show_page", "choose_projects"]) {
       expect(byName[name]!.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["create_project", "write_page", "append_to_page", "delete_page"]) {
+    for (const name of ["create_project", "update_project", "write_page", "append_to_page", "delete_page"]) {
       expect(byName[name]!.annotations?.readOnlyHint).toBe(false);
     }
     expect(byName.delete_page!.annotations?.destructiveHint).toBe(true);

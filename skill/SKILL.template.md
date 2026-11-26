@@ -28,11 +28,11 @@ happens to be long.
 ## Two ways in
 
 1. **MCP tools** (always available when the Anywhere connector is added): `guide`, `list_projects`,
-   `create_project`, `get_project`, `resume`, `read_page`, `write_page`, `append_to_page`,
+   `create_project`, `update_project`, `get_project`, `resume`, `read_page`, `write_page`, `append_to_page`,
    `delete_page`, `search`, and four that show the person Anywhere itself, drawn in the conversation
    where their app can do that and returned to you as text where it cannot: `show_projects` (all
    their projects), `show_project` (where one stands), `show_page` (one page, for reading) and
-   `choose_projects` (a checklist when setting up). When the person asks to see, look at or open
+   `choose_projects` (a map of their work to confirm when setting up). When the person asks to see, look at or open
    something in Anywhere, show it with these rather than describing it, and do not repeat what they
    can already see. Call `guide` once per conversation before first use. Resolve a project name to its slug
    with `list_projects`, then `get_project` returns the page list and the full `overview.md`.
@@ -117,38 +117,78 @@ If `plan.md` is empty and there is work in progress, fill it in first.
 
 ## Setting up
 
-When the person says "set up Anywhere", or connects it for the first time with existing work:
+Most people already have work spread over many folders, copies and conversations. Setting up is
+mapping that work into projects together with the person, then filling in the ones they keep.
 
 1. Call `list_projects` to see what is already there.
-2. **With file access (Claude Code, Codex):** ask first: "Can I list the projects on this computer?
-   It reads folder names and dates only, not your conversations or files." When they agree, run
+2. **Map their work.** With file access (Claude Code, Codex), ask first: "Can I map the work on this
+   computer? I'd read folder names, git remotes, the dates and titles of your past agent sessions,
+   and which docs each project has. Not your files or full conversations." When they agree, run
 
    ```bash
-   node <this skill's folder>/scripts/find-projects.mjs --days 180
+   node <this skill's folder>/scripts/map-work.mjs
    ```
 
-   It prints projects most recent first, from Claude Code sessions, Codex sessions and git folders,
-   with which of README.md, CLAUDE.md, AGENTS.md and plan folders each one has. Pass that list to
-   `choose_projects`, giving repositories of one product (such as `acme-app` and `acme-website`) the
-   same `group`, then stop and wait: where the app can draw it, the person ticks the ones they want
-   and their choice arrives as their next message. If they answer without having seen a checklist,
-   show the list as text and ask which to bring in. Do not import everything by default.
+   It prints the work grouped by repository owner (usually a business), then by product, each
+   repository with every folder that holds a copy of it, where it is hosted, which docs it has and
+   what recent sessions were about, and a suggestion: `bring_in`, `brief` or `skip`. At the end it
+   lists what it set aside: generated output, other people's projects, folders that no longer exist
+   and sessions outside any project. `--json` gives the same as data.
 
-   **Without file access (Claude chat, ChatGPT):** ask which projects they are working on, and what
-   they already know about each from your own memory of past conversations, if you have it.
-3. For each chosen project, in turn:
-   - Create it (`create_project`, with a one-line description).
+   Without file access (Claude chat, ChatGPT), ask what they work on, by business, and what you
+   remember of it from past conversations.
+3. **Turn it into a map.** The script groups by name; you judge by meaning. Read the session titles
+   and folder names, then:
+   - Make one project per product or piece of work. A product's app, website and admin are one
+     project with several repos. A folder named after an old name (a rename) is the same project.
+   - Name each by what it is, and give it a group: the business it belongs to. Repository owners
+     are a first guess; a person's own account often holds several businesses' work.
+   - Clients' sites usually belong in their agency's group. If there are many, suggest one project
+     per active client and `brief` for the rest.
+   - Folders that no longer exist and sessions outside any project still tell you what was worked
+     on: fold them into the project they were about, or mention them.
+   - Keep the map short: at most about 40 entries. Leave long tails of skipped repositories out of
+     the map and say how many there are.
+4. **Confirm it together.** Call `choose_projects` with the map: one entry per project with its
+   `group`, `description`, `repos`, `checkouts`, `last_active`, `suggest` and a few-word `reason`.
+   Mark ones already in Anywhere with `existing`. Then stop and wait. Their answer lists what to
+   bring in fully, what to keep as one line, what to leave out, and any corrections. Apply every
+   correction; if one changes the map a lot, show it again. If they answer without having seen a
+   map, show it as a short grouped list and ask them to confirm or correct it.
+5. **Bring in what they chose.** For each project to bring in fully, in turn:
+   - Create it with `create_project`: name, one-line description, `group` and every `repos`
+     address. For one already in Anywhere, use `update_project` instead and leave its pages.
    - Read only that project's README, `CLAUDE.md`, `AGENTS.md`, `.agents/memory.md`, the newest
-     files in its plan folders and its newest `.agents/sessions/` notes, if present.
-   - Fill `overview.md` (what, who for, current state), `plan.md` (only if there is work in progress
-     with a clear next step), `decisions.md` and `open-questions.md` from what those say. Write only
-     what the sources say; leave a page as it is when there is nothing for it.
+     files in its plan folders, its newest `.agents/sessions/` notes, and its deploy settings
+     (`vercel.json`, `.vercel/project.json`, `wrangler.toml`, `package.json` scripts), if present.
+     In a product with several repositories, read each one's README and agent files.
+   - If the map lists saved agent memory for it (Claude Code's own notes, in a `memory/` folder
+     next to its sessions), read those notes too. They hold rules, preferences and decisions the
+     person's agents were told over time: put rules and preferences in `rules.md` and decisions in
+     `decisions.md`. Leave out notes about other projects or about the agent itself.
+   - Fill `overview.md` (what, who for, current state), `where.md` (repositories and folders, hosting
+     and domains, services, how the parts connect), `rules.md` (the conventions and limits their
+     agent files set, linked rather than copied), `plan.md` (only if there is work in progress with a
+     clear next step), `decisions.md` and `open-questions.md`. Write only what the sources say;
+     leave a page as it is when there is nothing for it. Never copy keys, tokens or passwords: say
+     where a secret is kept instead. Anywhere refuses a page that contains one (`contains_secret`).
    - Start each page you fill with `> Imported from <files> on <YYYY-MM-DD>. Check and delete this line.`
-   - If it is a code project and the `anywr` command is installed, offer `anywr link <slug>` in that
-     folder.
-4. Finish with one line per project: what was created, and the page most worth checking.
+6. **One line for the rest.** For each project marked one line: `create_project` with status
+   `paused`, its group, repos and a one-line description, and a short `overview.md` saying what it is
+   and where its code is. Read nothing else.
+7. Finish with what was created, grouped by business, and the page most worth checking first. If
+   the `anywr` command is installed, offer `anywr link <slug>` in a project's main folder.
 
-Keep it light: a few projects done well beats every folder imported. The person can run it again.
+A few projects done well beat every folder imported. The person can run it again later; projects
+already in Anywhere are updated, not duplicated.
+
+## Finding the project for a folder
+
+When you start in a code folder that has no `.anywhere/` link and the person has not named a
+project, look it up by repository before asking: read the folder's remote with
+`git remote get-url origin` and call `list_projects` with it as `repo`. If a project lists that
+repository, use it. If none does, ask which project the folder belongs to, then add the repository
+to that project with `update_project` (pass its existing repos too).
 
 ## Read before you write
 
@@ -184,7 +224,7 @@ After writing, tell the person which page you changed and what you put there in 
 - New page: `write_page` without `base_version`. It never overwrites an existing page.
 - Changing a page: `write_page` with `base_version` set to the version you read.
 - Adding a dated line to `log.md` or a quick note: `append_to_page` (no version needed, cannot conflict).
-- `delete_page` needs `base_version`; the six standard pages cannot be deleted.
+- `delete_page` needs `base_version`; the standard pages cannot be deleted.
 
 ### If a write is refused
 
