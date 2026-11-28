@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { approveEmail } from "../src/auth/early-access.js";
 import { loadConfig } from "../src/config.js";
-import { BASE, makeTestApp, type TestApp } from "./helpers.js";
+import { BASE, codeFor, cookiesFrom, makeTestApp, type TestApp } from "./helpers.js";
 
 async function withApp(env: Record<string, string>, fn: (t: TestApp) => Promise<void>) {
   const t = await makeTestApp(env);
@@ -16,7 +16,7 @@ function signup(email: string): RequestInit {
   return {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE },
-    body: new URLSearchParams({ email, password: "a long password" }).toString(),
+    body: new URLSearchParams({ email }).toString(),
     redirect: "manual",
   };
 }
@@ -35,21 +35,26 @@ describe("sign-up modes", () => {
       expect(page).toContain("https://anywr.ai/early-access");
       expect(page).toContain('value="New@example.com"');
 
-      const refused = await t.fetch("/signup", signup("new@example.com"));
-      expect(refused.status).toBe(403);
-      expect(await refused.text()).toContain("not approved yet");
+      // Not approved: the person is told by email, and no code that could create an account is sent.
+      const refused = await t.fetch("/signin", signup("new@example.com"));
+      expect(refused.status).toBe(303);
+      expect(t.mailer.last("new@example.com")!.text).toContain("not have an account");
+      const guess = await t.fetch("/signin/code", { ...signup(""), body: new URLSearchParams({ code: "123456" }).toString(), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, cookie: cookiesFrom(refused) } });
+      expect(guess.headers.getSetCookie().some((c) => c.includes("anywr_session="))).toBe(false);
       expect((await t.db.query("SELECT 1 FROM users WHERE email = 'new@example.com'")).length).toBe(0);
 
       await approveEmail(t.db, "  NEW@example.com ");
-      const ok = await t.fetch("/signup", signup("New@Example.com"));
+      const sent = await t.fetch("/signin", signup("New@Example.com"));
+      const ok = await t.fetch("/signin/code", { ...signup(""), body: new URLSearchParams({ code: codeFor(t, "New@Example.com") }).toString(), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, cookie: cookiesFrom(sent) } });
       expect(ok.status).toBe(302);
+      expect(ok.headers.get("location")).toBe("/welcome");
     }));
 
   it("points sign-in at early access instead of open sign-up", () =>
     withApp({ ANYWHERE_SIGNUPS: "approved", ANYWHERE_EARLY_ACCESS_URL: "https://anywr.ai/early-access" }, async (t) => {
       const page = await (await t.fetch("/signin")).text();
       expect(page).toContain("Request early access");
-      expect(page).toContain("Create your account");
+      expect(page).toContain("Approved already?");
     }));
 });
 

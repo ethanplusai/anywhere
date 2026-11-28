@@ -1,14 +1,14 @@
 import type { Context, Hono } from "hono";
 import { html, raw } from "hono/html";
-import { createSession, deleteUserSessions } from "../auth/sessions.js";
-import { revokeAllPats } from "../auth/tokens.js";
-import { checkPassword, deleteUser, MIN_PASSWORD, setPassword } from "../auth/users.js";
+import { deleteUserSessions, isRecent } from "../auth/sessions.js";
+import { deleteUser } from "../auth/users.js";
 import { unlimited } from "../config.js";
 import type { Deps } from "../deps.js";
 import { listGrants, revokeAllGrants, revokeGrant } from "../oauth/grants.js";
-import { AppError } from "../service/errors.js";
+import { deletedEmail } from "../mail/templates.js";
+import { notify, sendQuietly } from "./notify.js";
 import { ago, appBadge, bytes, dateLabel, flash, icon, mark, type Flash, type Html } from "./render.js";
-import { clearSessionCookie, csrfOk, setSessionCookie, type WebEnv } from "./session.js";
+import { clearSessionCookie, csrfOk, type WebEnv } from "./session.js";
 
 type C = Context<WebEnv>;
 type Status = 200 | 400 | 403 | 404 | 409 | 422 | 429;
@@ -39,6 +39,7 @@ function appTarget(redirectUris: string[]): string {
 
 const SECTIONS = [
   ["/account", "Account"],
+  ["/account/security", "Security"],
   ["/account/apps", "Connected apps"],
   ["/tokens", "Tokens"],
 ] as const;
@@ -59,23 +60,22 @@ export function settingsPage(c: C, view: View, here: string, title: string, body
 }
 
 /**
- * Account pages (audit A3, D5): connected apps with revoke, password change, sign out everywhere,
- * delete project and delete account. Every form carries the CSRF token; destructive ones also need the
- * current password, and failed passwords count against the same per-account limit as sign-in.
+ * Sends the person to confirm it is them (a passkey or an email code) unless this browser did so in
+ * the last ten minutes. Destructive and account-changing actions call it on both the page and the
+ * form post. Local mode has no account to confirm: the unlocked browser is the owner.
+ */
+export function requireRecent(c: C, deps: Deps, back: string): Response | null {
+  if (deps.local || isRecent(c.get("session"))) return null;
+  return c.redirect(`/account/confirm?next=${encodeURIComponent(back)}`, 302);
+}
+
+/**
+ * Account pages (audit A3, D5): usage, connected apps with revoke, sign out everywhere, delete
+ * project and delete account. Every form carries the CSRF token; destructive ones also need the
+ * person to have confirmed it is them in the last ten minutes (see requireRecent).
  */
 export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers): void {
-  const { db, config, service, limiter } = deps;
-  const emailRule = { limit: config.signinEmailLimit, windowS: 15 * 60 };
-
-  /** Returns an error message, or null when the password is right. */
-  async function reauth(c: C, password: string): Promise<string | null> {
-    const user = c.get("user")!;
-    const key = `signin-email:${user.email.toLowerCase()}`;
-    if ((await limiter.peek(key, emailRule)) !== null) return "Too many failed attempts. Wait a few minutes and try again.";
-    if (await checkPassword(db, user.id, password)) return null;
-    await limiter.hit(key, emailRule);
-    return "That password is not right.";
-  }
+  const { db, config, service } = deps;
 
   const expired = (c: C, back: string) =>
     h.view(
@@ -87,8 +87,6 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     );
 
   const DONE: Record<string, Flash> = {
-    password: { kind: "ok", text: "Password changed. Every other browser was signed out." },
-    "password-all": { kind: "ok", text: "Password changed. Every other browser was signed out, and every app and token was disconnected." },
     disconnected: { kind: "ok", text: "App disconnected. It has to be approved again to use your account." },
     "disconnected-all": { kind: "ok", text: "Every app was disconnected." },
   };
@@ -141,16 +139,11 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
         </section>
 
         ${deps.local ? "" : html`<section class="section">
-          <h2>Password</h2>
-          <p>Changing it signs out every other browser.</p>
-          <form method="post" action="/account/password" class="card">
-            ${h.csrfField(c)}
-            <div class="field"><label for="current">Current password</label><input id="current" type="password" name="current" autocomplete="current-password" required /></div>
-            <div class="field"><label for="password">New password</label><input id="password" type="password" name="password" autocomplete="new-password" minlength="${MIN_PASSWORD}" required /><p class="hint">At least ${MIN_PASSWORD} characters.</p></div>
-            <div class="field"><label for="confirm">New password again</label><input id="confirm" type="password" name="confirm" autocomplete="new-password" minlength="${MIN_PASSWORD}" required /></div>
-            <div class="field"><label class="check"><input type="checkbox" name="disconnect" value="1" /> Also disconnect every app and revoke every token</label></div>
-            <div class="form-actions"><button type="submit">Change password</button></div>
-          </form>
+          <h2>Sign-in and security</h2>
+          <div class="card row-card">
+            <p class="muted" style="max-width:28rem">You sign in with a code sent to your email${config.github ? ", with GitHub" : ""} or with a passkey. See every signed-in browser and recent activity on the security page.</p>
+            <a class="btn btn-sm btn-quiet" href="/account/security">Security</a>
+          </div>
         </section>`}
 
         <section class="section">
@@ -175,7 +168,7 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
               ${h.csrfField(c)}
               <p>Everything goes, for you and every connected agent. Download any project you want to keep first.</p>
               <div class="field"><label for="del-email">Type your email to confirm</label><input id="del-email" type="email" name="email" autocomplete="off" required /></div>
-              <div class="field"><label for="del-password">Password</label><input id="del-password" type="password" name="password" autocomplete="current-password" required /></div>
+              <p class="hint">If you have not confirmed it is you in the last ten minutes, we ask you to first.</p>
               <div class="form-actions"><button type="submit" class="btn-solid-danger">Delete my account</button></div>
             </form>
           </details>
@@ -240,36 +233,8 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     if (gate) return gate;
     const form = await c.req.parseBody();
     if (!csrfOk(c, form._csrf)) return expired(c, "/account/apps");
-    await revokeGrant(db, c.get("user")!.id, c.req.param("family"));
+    if (await revokeGrant(db, c.get("user")!.id, c.req.param("family"))) await notify(deps, c, c.get("user")!, "app_disconnected", "", { email: false });
     return c.redirect("/account/apps?done=disconnected", 302);
-  });
-
-  app.post("/account/password", async (c) => {
-    const gate = h.requireUser(c);
-    if (gate) return gate;
-    const form = await c.req.parseBody();
-    if (!csrfOk(c, form._csrf)) return accountPage(c, { kind: "error", text: "This form expired. Try again." }, 403);
-    const user = c.get("user")!;
-    const error = await reauth(c, str(form.current));
-    if (error) return accountPage(c, { kind: "error", text: error }, 400);
-    const next = str(form.password);
-    if (next !== str(form.confirm)) return accountPage(c, { kind: "error", text: "The two new passwords are different." }, 422);
-    try {
-      await setPassword(db, user.id, next);
-    } catch (err) {
-      if (err instanceof AppError) return accountPage(c, { kind: "error", text: err.message }, 422);
-      throw err;
-    }
-    // Every session ends, this one included; this browser gets a fresh one.
-    await deleteUserSessions(db, user.id);
-    const all = str(form.disconnect) === "1";
-    if (all) {
-      await revokeAllGrants(db, user.id);
-      await revokeAllPats(db, user.id);
-    }
-    const sid = await createSession(db, user.id);
-    setSessionCookie(c, config, sid);
-    return c.redirect(`/account?done=${all ? "password-all" : "password"}`, 302);
   });
 
   app.post("/account/signout-everywhere", async (c) => {
@@ -277,6 +242,7 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     if (gate) return gate;
     const form = await c.req.parseBody();
     if (!csrfOk(c, form._csrf)) return expired(c, "/account");
+    await notify(deps, c, c.get("user")!, "signed_out_everywhere", "", { email: false });
     await deleteUserSessions(db, c.get("user")!.id);
     clearSessionCookie(c, config);
     return c.redirect("/signin", 302);
@@ -291,9 +257,10 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     if (str(form.email).trim().toLowerCase() !== user.email.toLowerCase()) {
       return accountPage(c, { kind: "error", text: "Type your email exactly to delete the account." }, 422);
     }
-    const error = await reauth(c, str(form.password));
-    if (error) return accountPage(c, { kind: "error", text: error }, 400);
+    const stale = requireRecent(c, deps, "/account#delete");
+    if (stale) return stale;
     await deleteUser(db, user.id);
+    await sendQuietly(deps, deletedEmail(deps.brand, user.email));
     clearSessionCookie(c, config);
     c.set("user", null);
     return h.view(
@@ -323,7 +290,6 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
         <form method="post" action="/projects/${slug}/delete" class="card danger-zone">
           ${h.csrfField(c)}
           <div class="field"><label for="confirm">Type <span class="mono">${slug}</span> to confirm</label><input id="confirm" type="text" name="confirm" autocomplete="off" required /></div>
-          ${deps.local ? "" : html`<div class="field"><label for="password">Your password</label><input id="password" type="password" name="password" autocomplete="current-password" required /></div>`}
           <div class="form-actions"><button type="submit" class="btn-solid-danger">Delete project</button><a class="btn btn-ghost" href="/projects/${slug}">Cancel</a></div>
         </form>
       </div>`,
@@ -331,7 +297,7 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     );
   }
 
-  app.get("/projects/:slug/delete", async (c) => h.requireUser(c) ?? deleteProjectPage(c, c.req.param("slug")));
+  app.get("/projects/:slug/delete", async (c) => h.requireUser(c) ?? requireRecent(c, deps, `/projects/${c.req.param("slug")}/delete`) ?? deleteProjectPage(c, c.req.param("slug")));
 
   app.post("/projects/:slug/delete", async (c) => {
     const gate = h.requireUser(c);
@@ -342,9 +308,8 @@ export function registerAccountRoutes(app: Hono<WebEnv>, deps: Deps, h: Helpers)
     const userId = c.get("user")!.id;
     const { project } = await service.getProject(userId, slug);
     if (str(form.confirm).trim() !== project.slug) return deleteProjectPage(c, slug, "Type the slug exactly to delete the project.", 422);
-    // A local server has no password to ask for: the unlocked browser and the typed slug are the check.
-    const error = deps.local ? null : await reauth(c, str(form.password));
-    if (error) return deleteProjectPage(c, slug, error, 400);
+    const stale = requireRecent(c, deps, `/projects/${slug}/delete`);
+    if (stale) return stale;
     await service.deleteProject(userId, project.slug);
     return c.redirect("/projects", 302);
   });

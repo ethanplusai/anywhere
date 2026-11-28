@@ -2,7 +2,7 @@ import { unzipSync } from "fflate";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { section } from "../src/mcp/briefing.js";
 import { renderMarkdown } from "../src/web/render.js";
-import { BASE, csrfFrom, makeTestApp, signIn, type TestApp } from "./helpers.js";
+import { BASE, codeFor, cookiesFrom, csrfFrom, makeTestApp, signIn, type TestApp } from "./helpers.js";
 
 let t: TestApp;
 beforeEach(async () => {
@@ -22,50 +22,106 @@ function form(body: Record<string, string>, cookie?: string, origin = BASE): Req
 }
 
 describe("accounts", () => {
-  it("signs up, lands on the project list, and signs out", async () => {
-    const res = await t.fetch("/signup", form({ email: "new@example.com", password: "a long password" }));
+  const xff = (body: Record<string, string>, ip: string, cookie?: string): RequestInit => ({
+    ...form(body, cookie),
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, "x-forwarded-for": ip, ...(cookie ? { cookie } : {}) },
+  });
+
+  it("signs up with an emailed code, lands on the welcome page, and signs out", async () => {
+    const sent = await t.fetch("/signin", form({ email: "new@example.com" }));
+    expect(sent.status).toBe(303);
+    expect(sent.headers.get("location")).toBe("/signin/code");
+    let jar = cookiesFrom(sent);
+    const mail = t.mailer.last("new@example.com")!;
+    expect(mail.subject).toMatch(/^Your Anywhere code: \d{6}$/);
+    expect(mail.html).not.toMatch(/supabase|vercel/i);
+    const page = await (await t.fetch("/signin/code", { headers: { cookie: jar } })).text();
+    expect(page).toContain("new@example.com");
+
+    const res = await t.fetch("/signin/code", form({ code: codeFor(t, "new@example.com") }, jar));
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/welcome");
-    const setCookie = res.headers.get("set-cookie")!;
-    expect(setCookie).toMatch(/anywr_session=/);
+    const setCookie = res.headers.getSetCookie().find((c) => c.includes("anywr_session="))!;
     expect(setCookie).toMatch(/HttpOnly/i);
     expect(setCookie).toMatch(/SameSite=Lax/i);
     expect(setCookie).toMatch(/Secure/i);
-    const cookie = setCookie.split(";")[0]!;
-    const page = await t.fetch("/projects", { headers: { cookie } });
-    const text = await page.text();
-    expect(text).toContain("shared memory starts here");
+    jar = cookiesFrom(res, jar);
+    const [row] = await t.db.query<{ email_verified_at: Date | null }>("SELECT email_verified_at FROM users WHERE email = 'new@example.com'");
+    expect(row!.email_verified_at).not.toBeNull();
+    expect(await (await t.fetch("/projects", { headers: { cookie: jar } })).text()).toContain("shared memory starts here");
 
-    const account = await (await t.fetch("/account", { headers: { cookie } })).text();
-    const out = await t.fetch("/signout", form({ _csrf: csrfFrom(account) }, cookie));
+    const account = await (await t.fetch("/account", { headers: { cookie: jar } })).text();
+    expect(account).not.toContain('type="password"');
+    const out = await t.fetch("/signout", form({ _csrf: csrfFrom(account) }, jar));
     expect(out.status).toBe(302);
-    const after = await t.fetch("/projects", { headers: { cookie }, redirect: "manual" });
-    expect(after.status).toBe(302);
+    const after = await t.fetch("/projects", { headers: { cookie: jar }, redirect: "manual" });
     expect(after.headers.get("location")).toBe("/signin?next=%2Fprojects");
   });
 
-  it("refuses duplicate emails, short passwords and wrong passwords with a message", async () => {
-    const dup = await t.fetch("/signup", form({ email: "me@example.com", password: "a long password" }));
-    expect(dup.status).toBe(409);
-    expect(await dup.text()).toContain("already exists");
-    const short = await t.fetch("/signup", form({ email: "x@example.com", password: "short" }));
-    expect(short.status).toBe(422);
-    const wrong = await t.fetch("/signin", form({ email: "me@example.com", password: "nope nope nope" }));
-    expect(wrong.status).toBe(400);
-    expect(await wrong.text()).toContain("do not match");
+  it("answers the same whether or not an address has an account", async () => {
+    const gated = await makeTestApp({ ANYWHERE_SIGNUPS: "approved", ANYWHERE_EARLY_ACCESS_URL: "https://anywr.ai/early-access" });
+    try {
+      const results = [];
+      for (const email of ["me@example.com", "stranger@example.com"]) {
+        const res = await gated.fetch("/signin", form({ email }));
+        results.push([res.status, res.headers.get("location")]);
+      }
+      expect(results[0]).toEqual(results[1]);
+      expect(gated.mailer.last("me@example.com")!.subject).toContain("sign-in code");
+      const stranger = gated.mailer.last("stranger@example.com")!;
+      expect(stranger.subject).toBe("About signing in to Anywhere");
+      expect(stranger.text).toContain("https://anywr.ai/early-access");
+      expect(stranger.text).not.toMatch(/\b\d{6}\b/);
+    } finally {
+      await gated.close();
+    }
+  });
+
+  it("refuses a wrong code with the tries left, and ends after five", async () => {
+    const sent = await t.fetch("/signin", form({ email: "me@example.com" }));
+    const jar = cookiesFrom(sent);
+    const code = codeFor(t, "me@example.com");
+    const wrong = code === "000000" ? "111111" : "000000";
+    const first = await t.fetch("/signin/code", form({ code: wrong }, jar));
+    expect(first.status).toBe(400);
+    expect(await first.text()).toContain("4 tries left");
+    for (let i = 0; i < 4; i++) await t.fetch("/signin/code", form({ code: wrong }, jar));
+    const late = await t.fetch("/signin/code", form({ code }, jar));
+    expect(late.status).not.toBe(302);
+  });
+
+  it("a code only works in the browser that asked for it", async () => {
+    await t.fetch("/signin", form({ email: "me@example.com" }));
+    const elsewhere = await t.fetch("/signin/code", form({ code: codeFor(t, "me@example.com") }));
+    expect(elsewhere.status).toBe(303);
+    expect(elsewhere.headers.get("location")).toBe("/signin?m=expired");
+  });
+
+  it("the emailed link shows a button first, then signs in once on any device", async () => {
+    await t.fetch("/signin", form({ email: "me@example.com", next: "/tokens" }));
+    const link = /https:\/\/anywr\.test(\/signin\/link\?t=[A-Za-z0-9_-]+)/.exec(t.mailer.last("me@example.com")!.text)![1]!;
+    const opened = await t.fetch(link);
+    expect(opened.status).toBe(200);
+    expect(opened.headers.getSetCookie().some((c) => c.includes("anywr_session="))).toBe(false);
+    const token = new URL(link, BASE).searchParams.get("t")!;
+    const used = await t.fetch("/signin/link", form({ t: token }));
+    expect(used.status).toBe(302);
+    expect(used.headers.get("location")).toBe("/tokens");
+    expect((await t.fetch("/signin/link", form({ t: token }))).status).toBe(400);
   });
 
   it("refuses cross-site sign-in posts", async () => {
-    const res = await t.fetch("/signin", form({ email: "me@example.com", password: "long enough pw" }, undefined, "https://evil.example"));
-    expect(res.status).toBe(403);
+    for (const path of ["/signin", "/signin/code", "/signin/link"]) {
+      expect((await t.fetch(path, form({ email: "me@example.com", code: "123456", t: "x" }, undefined, "https://evil.example"))).status, path).toBe(403);
+    }
+    expect(t.mailer.sent).toHaveLength(0);
   });
 
   it("only follows same-site next destinations after sign-in", async () => {
-    const ok = await t.fetch("/signin", form({ email: "me@example.com", password: "long enough pw", next: "/tokens" }));
-    expect(ok.headers.get("location")).toBe("/tokens");
-    for (const next of ["https://evil.example", "//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example"]) {
-      const res = await t.fetch("/signin", form({ email: "me@example.com", password: "long enough pw", next }));
-      expect(res.headers.get("location")).toBe("/projects");
+    for (const [next, expected] of [["/tokens", "/tokens"], ["https://evil.example", "/projects"], ["//evil.example", "/projects"], ["/\\evil.example", "/projects"], ["/\t/evil.example", "/projects"]] as const) {
+      const sent = await t.fetch("/signin", xff({ email: "me@example.com", next }, "10.1.1.1"));
+      const res = await t.fetch("/signin/code", form({ code: codeFor(t, "me@example.com") }, cookiesFrom(sent)));
+      expect(res.headers.get("location"), next).toBe(expected);
     }
   });
 
@@ -73,46 +129,37 @@ describe("accounts", () => {
     const closed = await makeTestApp({ ANYWHERE_DISABLE_SIGNUPS: "1" });
     try {
       expect((await closed.fetch("/signup")).status).toBe(403);
-      const res = await closed.fetch("/signup", form({ email: "new@example.com", password: "a long password" }));
-      expect(res.status).toBe(403);
-      expect((await closed.fetch("/signin")).status).toBe(200);
+      const res = await closed.fetch("/signin", form({ email: "new@example.com" }));
+      expect(res.status).toBe(303);
+      expect(closed.mailer.sent).toHaveLength(0);
       expect(await (await closed.fetch("/signin")).text()).not.toContain("Create an account");
+      expect(closed.mailer.sent).toHaveLength(0);
     } finally {
       await closed.close();
     }
   });
 
+  it("sends at most five codes an hour to one address", async () => {
+    for (let i = 0; i < 5; i++) expect((await t.fetch("/signin", xff({ email: "me@example.com" }, `10.2.0.${i}`))).status).toBe(303);
+    const sixth = await t.fetch("/signin", xff({ email: "ME@example.com" }, "10.2.0.9"));
+    expect(sixth.status).toBe(429);
+    expect(t.mailer.sent).toHaveLength(5);
+  });
+
   it("does not believe X-Forwarded-For unless told to trust the proxy", async () => {
     const limited = await makeTestApp({ ANYWHERE_AUTH_RATE_LIMIT: "2" });
     try {
-      for (let i = 0; i < 2; i++) {
-        await limited.fetch("/signin", { ...form({ email: "me@example.com", password: "wrong wrong" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, "x-forwarded-for": `10.0.0.${i}` } });
-      }
-      const res = await limited.fetch("/signin", { ...form({ email: "me@example.com", password: "long enough pw" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, "x-forwarded-for": "10.0.0.99" } });
-      expect(res.status).toBe(429);
+      for (let i = 0; i < 2; i++) await limited.fetch("/signin", xff({ email: `a${i}@example.com` }, `10.0.0.${i}`));
+      expect((await limited.fetch("/signin", xff({ email: "b@example.com" }, "10.0.0.99"))).status).toBe(429);
     } finally {
       await limited.close();
     }
     const trusting = await makeTestApp({ ANYWHERE_AUTH_RATE_LIMIT: "2", ANYWHERE_TRUST_PROXY: "1" });
     try {
-      for (let i = 0; i < 2; i++) {
-        await trusting.fetch("/signin", { ...form({ email: "me@example.com", password: "wrong wrong" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, "x-forwarded-for": "10.0.0.1" } });
-      }
-      const other = await trusting.fetch("/signin", { ...form({ email: "me@example.com", password: "long enough pw" }), headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE, "x-forwarded-for": "10.0.0.2" } });
-      expect(other.status).toBe(302);
+      for (let i = 0; i < 2; i++) await trusting.fetch("/signin", xff({ email: `a${i}@example.com` }, "10.0.0.1"));
+      expect((await trusting.fetch("/signin", xff({ email: "b@example.com" }, "10.0.0.2"))).status).toBe(303);
     } finally {
       await trusting.close();
-    }
-  });
-
-  it("limits sign-in attempts per address", async () => {
-    const limited = await makeTestApp({ ANYWHERE_AUTH_RATE_LIMIT: "2" });
-    try {
-      for (let i = 0; i < 2; i++) await limited.fetch("/signin", form({ email: "me@example.com", password: "wrong wrong" }));
-      const res = await limited.fetch("/signin", form({ email: "me@example.com", password: "long enough pw" }));
-      expect(res.status).toBe(429);
-    } finally {
-      await limited.close();
     }
   });
 });

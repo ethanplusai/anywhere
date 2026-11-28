@@ -135,7 +135,7 @@ describe("D5: deleting data", () => {
     try {
       await t.api("POST", "/projects", { name: "Mine" });
       const other = await makeTestApp({}, { db: t.db });
-      const [o] = await t.db.query<{ id: string }>("INSERT INTO users (id, email, password_hash) VALUES ('u2', 'o@example.com', 'x') RETURNING id");
+      const [o] = await t.db.query<{ id: string }>("INSERT INTO users (id, email) VALUES ('u2', 'o@example.com') RETURNING id");
       const { createPat } = await import("../src/auth/tokens.js");
       const { token } = await createPat(t.db, o!.id, "o");
       expect((await other.api("DELETE", "/projects/mine?confirm=mine", undefined, token)).status).toBe(404);

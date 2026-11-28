@@ -69,6 +69,15 @@ Every limit has a safe default; set a variable only to change it. Invalid values
 | `ANYWHERE_EARLY_ACCESS_URL` | empty | Where people request access while sign-ups are `approved`. |
 | `ANYWHERE_MCP_ORIGIN` | `BASE_URL` | Give agents a host of their own, e.g. `https://mcp.example.com`. The MCP endpoint is then only served there, at `/mcp`, and other paths on that host redirect to `BASE_URL`. |
 | `ANYWHERE_SITE_URL` | `https://anywr.ai` | The website the app's footer links to for docs, security, privacy and terms. |
+| **Email and sign-in** | | |
+| `RESEND_API_KEY` | unset | Send email through Resend. Use a key restricted to sending from your mail domain. |
+| `ANYWHERE_SMTP_URL` | unset | Or send through any SMTP server, e.g. `smtps://user:pass@smtp.example.com:465`. Set one of the two; with `NODE_ENV=production` the server refuses to start with neither. In development, emails are printed to the console. |
+| `ANYWHERE_MAIL_FROM` | none | The sender, e.g. `Anywhere <hello@mail.example.com>`. Send from a subdomain with SPF, DKIM and DMARC set up. |
+| `ANYWHERE_MAIL_REPLY_TO` | unset | Where replies go. |
+| `ANYWHERE_SUPPORT_EMAIL` | unset | The help address shown in emails and on the security page. |
+| `ANYWHERE_MAIL_ALLOWLIST` | unset | Comma-separated addresses or `@domains`. When set, mail to anyone else is dropped with a log line. Set it on staging and previews. |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | unset | Offer sign-in with GitHub through your own GitHub OAuth app. Its callback URL is `BASE_URL/auth/github/callback`. |
+| `ANYWHERE_PRODUCT_NAME` | `Anywhere` | The name used in emails and passkey prompts. |
 | **Addresses** | | |
 | `ANYWHERE_CLIENT_IP_HEADER` | unset | A header your platform sets to the client address and clients cannot forge, e.g. `x-real-ip` (Vercel, nginx), `cf-connecting-ip` (Cloudflare), `fly-client-ip`. Wins over `ANYWHERE_TRUST_PROXY`. |
 | `ANYWHERE_TRUST_PROXY` | `0` | Number of proxies you control that append to `X-Forwarded-For` (`1`/`true` = one). Rate limits use the entry that many places from the right; entries further left are whatever the client sent. |
@@ -76,7 +85,7 @@ Every limit has a safe default; set a variable only to change it. Invalid values
 | `ANYWHERE_API_RATE_LIMIT` | `600` | Requests per minute per user on `/api/v1` and `/mcp`. |
 | `ANYWHERE_MAX_CONCURRENT_PER_USER` | `8` | Concurrent `/api/v1` and `/mcp` requests per user in one process. |
 | `ANYWHERE_AUTH_RATE_LIMIT` | `20` | Per minute per address: sign-in and sign-up, client registration, token creation, client metadata lookups. |
-| `ANYWHERE_SIGNIN_EMAIL_LIMIT` | `10` | Failed sign-ins (or failed password re-entries) per account per 15 minutes before the account is locked for the rest of the window. |
+| `ANYWHERE_SIGNIN_EMAIL_LIMIT` | `5` | Sign-in and confirmation codes sent to one address per hour. |
 | `ANYWHERE_UNAUTH_RATE_LIMIT` | `30` | Failed bearer authentications per minute per address on `/api/v1` and `/mcp`; then `429`. |
 | `ANYWHERE_WEB_RATE_LIMIT` | `300` | Web page requests per minute per signed-in user, or per address when signed out. |
 | `ANYWHERE_REGISTRATIONS_PER_HOUR` | `200` | Dynamic client registrations per hour, server-wide. |
@@ -116,8 +125,14 @@ The signed-in web page `/connect` has the steps for each client. In short, every
 
 ## How sign-in works
 
-- People use email and password (scrypt N=2^15, r=8, p=3; older hashes are upgraded at sign-in). Sessions are HttpOnly, SameSite=Lax cookies named with the `__Host-` prefix on https; every signed-in form carries a CSRF token, and sign-in and sign-up need a matching `Origin` (or `Sec-Fetch-Site: same-origin`). Signing in ends any session already in that browser.
-- `/account` lists connected apps (each can be disconnected), changes the password (ending every session and optionally every app and token), signs out everywhere and deletes the account. Deleting a project or the account needs the password again. Personal access tokens can be given an expiry.
+- There are no passwords. People sign in three ways:
+  - **Email code.** A six-digit code and a one-time link, sent together, valid for 10 minutes and stored as hashes. The code works only in the browser that asked for it (tied to an HttpOnly browser-id cookie), and five wrong guesses end it. The link works once on any device; opening it shows a button rather than signing in, so mail scanners cannot use it up. Signing in and signing up are one form: an address with no account gets one when its code is entered, if `ANYWHERE_SIGNUPS` allows it. The page answers the same whatever the address; only the email differs.
+  - **GitHub**, through the server's own GitHub OAuth app, with `state` and PKCE. Only a verified primary email is used. GitHub's token is used once and never stored. An existing account with that email gets GitHub linked, and its owner is emailed.
+  - **Passkeys** (WebAuthn), with user verification required. Challenges are stored server-side, tied to the browser and used once.
+- Sessions are HttpOnly, SameSite=Lax cookies named with the `__Host-` prefix on https; every signed-in form carries a CSRF token, and sign-in posts need a matching `Origin` (or `Sec-Fetch-Site: same-origin`). Signing in ends any session already in that browser.
+- Deleting a project or the account, changing the email, adding or removing a passkey, linking or unlinking GitHub and downloading everything need the person to have confirmed it is them in the last 10 minutes, with a passkey or an emailed code.
+- `/account/security` lists the ways to sign in, passkeys, every signed-in browser (each can be signed out) and recent account activity. New sign-ins with GitHub, new tokens, connected apps, passkey and GitHub changes and email changes are emailed to the owner, with the browser and network they came from (an address with its last part hidden). An email change is sent to the old address.
+- `/account` lists usage, signs out everywhere and deletes the account; `/account/apps` lists connected apps (each can be disconnected); `/account/export.zip` downloads every project. Personal access tokens can be given an expiry.
 - MCP clients use OAuth: protected-resource metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, authorization-server metadata (RFC 8414) at `/.well-known/oauth-authorization-server`, dynamic client registration (RFC 7591) at `/oauth/register`, Client ID Metadata Documents (an `https` URL as `client_id`), PKCE S256 only, loopback redirects matched ignoring the port, form-encoded `/oauth/token` with refresh-token rotation (reusing a spent refresh token revokes the whole grant).
 - Access tokens last an hour, refresh tokens 30 days, and neither outlives its grant (90 days). RFC 7009 revocation at `/oauth/revoke`. All tokens are opaque and stored as SHA-256 hashes.
 - The consent page names a client only when its redirect host is on the verified list; otherwise it leads with "An unverified app at <redirect>".
@@ -149,8 +164,9 @@ src/
   api/              /api/v1
   mcp/              /mcp: tools, instructions
   oauth/            authorization server: metadata, registration, CIMD, authorize, token
-  auth/             passwords, sessions, personal access tokens, bearer resolution, rate limits
-  web/              server-rendered pages (account.ts: connected apps, password, deletion) and markdown rendering
+  auth/             email codes, GitHub, passkeys, sessions, account events, personal access tokens, bearer resolution, rate limits
+  mail/             sending (Resend, SMTP, console) and the email templates
+  web/              server-rendered pages (signin.ts, security.ts, account.ts) and markdown rendering
   export/           streamed zip export
   db/               pg and PGlite drivers, migration runner, purgeExpired
 migrations/         SQL, applied in name order

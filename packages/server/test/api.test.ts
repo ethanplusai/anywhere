@@ -86,7 +86,7 @@ describe("projects", () => {
   });
 
   it("404s an unknown project and another user's project", async () => {
-    const other = await createUser(t.db, "o@example.com", "long enough pw");
+    const other = await createUser(t.db, "o@example.com");
     const { token } = await createPat(t.db, other.id, "o");
     await t.api("POST", "/projects", { name: "Secret" }, token);
     await expectApiError(await t.api("GET", "/projects/secret"), 404, "not_found");

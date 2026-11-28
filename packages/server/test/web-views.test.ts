@@ -54,7 +54,7 @@ describe("projects in the browser", () => {
     const res = await t.fetch("/projects/acme-rebrand/edit/ideas.md", post({ _csrf: csrfFrom(edit), baseVersion: "1", content }));
     expect(res.status).toBe(302);
     // Other forms keep the small limit.
-    const big = await t.fetch("/account/password", post({ _csrf: csrfFrom(edit), junk: "x".repeat(100_000) }));
+    const big = await t.fetch("/account/signout-everywhere", post({ _csrf: csrfFrom(edit), junk: "x".repeat(100_000) }));
     expect(big.status).toBe(413);
   });
 

@@ -244,7 +244,8 @@ The contract between the CLI and the server is [docs/api.md](docs/api.md).
 Anywhere holds people's working notes and is connected to agents that act on their behalf, so it is built defensively:
 
 - OAuth 2.1 with PKCE, dynamic client registration and client metadata documents. The approval page names where an app sends you back to and warns when an unverified app uses a well-known name.
-- Tokens and passwords are stored only as hashes. Connections expire after 90 days and can be disconnected at any time.
+- There are no passwords: you sign in with a code sent to your email, with GitHub or with a passkey. Tokens and codes are stored only as hashes. Connections expire after 90 days and can be disconnected at any time.
+- New sign-ins with GitHub, connected apps, new tokens and changes to how you sign in are emailed to you, and the security page lists every signed-in browser and recent activity.
 - Rate limits per address, per account and per user, quotas per account, and a strict content security policy on every page.
 - Page content is sanitised when rendered, remote images are never loaded, and content returned to agents is marked as data.
 

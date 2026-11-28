@@ -10,6 +10,25 @@ function signupMode(env: Record<string, string | undefined>): SignupMode {
   return isTrue(env.ANYWHERE_DISABLE_SIGNUPS) ? "closed" : "open";
 }
 
+/** How the server sends email: sign-in codes and security notices. */
+export interface MailConfig {
+  /** "resend" (RESEND_API_KEY), "smtp" (ANYWHERE_SMTP_URL), "log" (print to the console, development only) or "none". */
+  provider: "resend" | "smtp" | "log" | "none";
+  /** The sender, e.g. `Anywhere <hello@mail.anywr.ai>`. Use a sending subdomain with SPF, DKIM and DMARC set up. */
+  from: string;
+  /** Where replies go, e.g. support@anywr.ai. Empty: replies go to the sender. */
+  replyTo: string;
+  /** Shown in emails and on pages as the address to write to for help. */
+  supportEmail: string;
+  resendApiKey: string;
+  smtpUrl: string;
+  /**
+   * When set, mail goes only to these addresses (or @domains) and everything else is dropped with a
+   * log line. Use it on staging and preview deployments so tests never email real people.
+   */
+  allowlist: string[];
+}
+
 export interface Config {
   /**
    * Local mode (ANYWHERE_LOCAL=1): one person on their own computer. The server listens on a
@@ -42,7 +61,7 @@ export interface Config {
   apiRateLimit: number;
   /** Requests per minute per address on sign-in, sign-up, client registration and token creation. */
   authRateLimit: number;
-  /** Failed sign-ins per account per 15 minutes before that account is locked for the rest of the window. */
+  /** Sign-in and confirmation codes sent to one address per hour. */
   signinEmailLimit: number;
   /** Requests per minute per signed-in user (or per address when signed out) on web pages. */
   webRateLimit: number;
@@ -77,6 +96,11 @@ export interface Config {
   grantLifetimeDays: number;
   /** A web session ends after this many days without use, and always after 30. */
   sessionIdleDays: number;
+  mail: MailConfig;
+  /** Sign in with GitHub, through this server's own GitHub OAuth app. Null when not configured. */
+  github: { clientId: string; clientSecret: string } | null;
+  /** The product name shown in emails, passkey prompts and pages. */
+  productName: string;
 }
 
 /** Per-account storage limits, enforced inside the write transaction. */
@@ -171,6 +195,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const mcpOrigin = (env.ANYWHERE_MCP_ORIGIN || baseUrl).replace(/\/+$/, "");
   if (production) assertSecureBaseUrl(mcpOrigin);
   const signups = local ? "closed" : signupMode(env);
+  const mail = mailConfig(env, local, production);
+  const githubId = env.GITHUB_CLIENT_ID?.trim() ?? "";
+  const githubSecret = env.GITHUB_CLIENT_SECRET?.trim() ?? "";
+  if (!!githubId !== !!githubSecret) throw new ConfigError("Set both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to offer sign-in with GitHub, or neither.");
   return {
     local,
     home,
@@ -185,7 +213,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     disableSignups: signups === "closed",
     apiRateLimit: int(env, "ANYWHERE_API_RATE_LIMIT", 600),
     authRateLimit: int(env, "ANYWHERE_AUTH_RATE_LIMIT", 20),
-    signinEmailLimit: int(env, "ANYWHERE_SIGNIN_EMAIL_LIMIT", 10),
+    signinEmailLimit: int(env, "ANYWHERE_SIGNIN_EMAIL_LIMIT", 5),
     webRateLimit: int(env, "ANYWHERE_WEB_RATE_LIMIT", 300),
     unauthRateLimit: int(env, "ANYWHERE_UNAUTH_RATE_LIMIT", 30),
     registrationsPerHour: int(env, "ANYWHERE_REGISTRATIONS_PER_HOUR", 200),
@@ -214,6 +242,43 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     grantLifetimeDays: int(env, "ANYWHERE_GRANT_LIFETIME_DAYS", 90),
     sessionIdleDays: int(env, "ANYWHERE_SESSION_IDLE_DAYS", 14),
+    mail,
+    github: githubId && !local ? { clientId: githubId, clientSecret: githubSecret } : null,
+    productName: env.ANYWHERE_PRODUCT_NAME?.trim() || "Anywhere",
+  };
+}
+
+/**
+ * People sign in with a code sent by email, so a server with accounts needs a way to send it. In
+ * production a missing or half-set provider is a startup error, not a sign-in page that never works.
+ */
+function mailConfig(env: Record<string, string | undefined>, local: boolean, production: boolean): MailConfig {
+  const resendApiKey = env.RESEND_API_KEY?.trim() ?? "";
+  const smtpUrl = env.ANYWHERE_SMTP_URL?.trim() ?? "";
+  const from = env.ANYWHERE_MAIL_FROM?.trim() ?? "";
+  const allowlist = (env.ANYWHERE_MAIL_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  let provider: MailConfig["provider"];
+  if (local) provider = "none";
+  else if (resendApiKey && smtpUrl) throw new ConfigError("Set RESEND_API_KEY or ANYWHERE_SMTP_URL, not both.");
+  else if (resendApiKey) provider = "resend";
+  else if (smtpUrl) provider = "smtp";
+  else if (production) {
+    throw new ConfigError("Anywhere signs people in by email. Set RESEND_API_KEY or ANYWHERE_SMTP_URL, and ANYWHERE_MAIL_FROM.");
+  } else provider = "log";
+  if ((provider === "resend" || provider === "smtp") && !/<[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+>$|^[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+$/.test(from)) {
+    throw new ConfigError('ANYWHERE_MAIL_FROM must be an address, such as "Anywhere <hello@mail.example.com>".');
+  }
+  return {
+    provider,
+    from: from || "Anywhere <hello@localhost.invalid>",
+    replyTo: env.ANYWHERE_MAIL_REPLY_TO?.trim() ?? "",
+    supportEmail: env.ANYWHERE_SUPPORT_EMAIL?.trim() ?? "",
+    resendApiKey,
+    smtpUrl,
+    allowlist,
   };
 }
 

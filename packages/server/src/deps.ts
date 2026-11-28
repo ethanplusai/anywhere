@@ -5,6 +5,9 @@ import type { Service } from "./service/projects.js";
 import type { ConcurrencyGate, RateLimiter } from "./auth/ratelimit.js";
 import type { LocalSetup } from "./local.js";
 import type { LocalConnector } from "./local-connect.js";
+import type { Mailer } from "./mail/mailer.js";
+import type { Brand } from "./mail/templates.js";
+import type { RelyingParty } from "./auth/passkeys.js";
 
 /** Everything the route modules share. Built once in createApp. */
 export interface Deps {
@@ -22,6 +25,12 @@ export interface Deps {
   local: LocalSetup | undefined;
   /** Set in local mode: connects the agents on this computer at the press of a button (see src/local-connect.ts). */
   connector: LocalConnector | undefined;
+  /** Sends sign-in codes and security notices. */
+  mailer: Mailer;
+  /** Names and addresses that go into emails. */
+  brand: Brand;
+  /** The passkey relying party: this server's host name and origin. */
+  rp: RelyingParty;
 }
 
 export type Env = { Variables: { userId: string; actor: string } };

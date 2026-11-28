@@ -5,6 +5,15 @@ import { mcpUrl, type Deps } from "../deps.js";
 import { clientIp, ipKey } from "../http.js";
 import { icon, layout, logo, mark } from "../web/render.js";
 import { csrfOk, sessionMiddleware, type WebEnv } from "../web/session.js";
+import { notify } from "../web/notify.js";
+
+function appHost(uri: string): string {
+  try {
+    return new URL(uri).host || "an app";
+  } catch {
+    return "an app";
+  }
+}
 import {
   OAuthError,
   authenticateClient,
@@ -267,6 +276,7 @@ export function oauthRoutes(deps: Deps): Hono<WebEnv> {
         resource: v.resource,
         scope: v.scope,
       });
+      await notify(deps, c, user, "app_connected", (v.client.clientName ?? "").slice(0, 80) || appHost(v.redirectUri));
       return redirectWith(c, v.redirectUri, { code, state: v.state });
     });
   });

@@ -16,18 +16,24 @@ import { purgeExpired } from "./db/maintenance.js";
 import { localGuard, type LocalSetup } from "./local.js";
 import { localConnector, type LocalConnector } from "./local-connect.js";
 import { GEIST_MONO_WOFF2, GEIST_WOFF2 } from "./web/fonts.generated.js";
+import { MARK_PNG, MARK_SVG } from "./web/brand.generated.js";
 import { APP_JS } from "./web/render.js";
 import { SKILL_FILES } from "./web/skill.generated.js";
 import { tarGz } from "./web/tar.js";
+import { createMailer, type Mailer } from "./mail/mailer.js";
 
 const SKILL_TGZ = tarGz(
   SKILL_FILES.map((f) => ({ ...f, mode: f.path.endsWith(".mjs") ? 0o755 : 0o644 })),
   Math.floor(Date.now() / 1000),
 );
 
-const FONTS: Record<string, Buffer> = {
-  "/assets/geist.woff2": Buffer.from(GEIST_WOFF2, "base64"),
-  "/assets/geist-mono.woff2": Buffer.from(GEIST_MONO_WOFF2, "base64"),
+/** Files served under /assets/, all from memory and none private. */
+const ASSETS: Record<string, { type: string; body: Buffer; maxAge: number }> = {
+  "/assets/geist.woff2": { type: "font/woff2", body: Buffer.from(GEIST_WOFF2, "base64"), maxAge: 31536000 },
+  "/assets/geist-mono.woff2": { type: "font/woff2", body: Buffer.from(GEIST_MONO_WOFF2, "base64"), maxAge: 31536000 },
+  // The icon in browser tabs, and the mark at the top of every email (which loads it from here).
+  "/assets/mark.svg": { type: "image/svg+xml", body: Buffer.from(MARK_SVG, "utf8"), maxAge: 86400 },
+  "/assets/mark.png": { type: "image/png", body: Buffer.from(MARK_PNG, "base64"), maxAge: 86400 },
 };
 
 export interface AppOptions {
@@ -39,6 +45,8 @@ export interface AppOptions {
   local?: LocalSetup;
   /** Local mode only: how agents on this computer get connected. Tests replace it. */
   connector?: LocalConnector;
+  /** How email is sent. Tests pass a MemoryMailer; otherwise built from config.mail. */
+  mailer?: Mailer;
 }
 
 export function createApp(options: AppOptions) {
@@ -53,6 +61,14 @@ export function createApp(options: AppOptions) {
     fetch: options.fetch,
     local: options.local,
     connector: options.connector ?? (options.local ? localConnector(options.config, options.local) : undefined),
+    mailer: options.mailer ?? createMailer(options.config.mail),
+    brand: {
+      productName: options.config.productName,
+      appUrl: options.config.baseUrl,
+      siteUrl: options.config.siteUrl,
+      supportEmail: options.config.mail.supportEmail,
+    },
+    rp: { id: new URL(options.config.baseUrl).hostname, name: options.config.productName, origin: new URL(options.config.baseUrl).origin },
   };
   if (options.config.local && !options.local) throw new Error("Local mode needs prepareLocal() before createApp().");
 
@@ -68,7 +84,8 @@ export function createApp(options: AppOptions) {
     c.header("X-Content-Type-Options", "nosniff");
     return c.body(new Uint8Array(SKILL_TGZ));
   });
-  // The web pages' fonts (Geist, SIL Open Font License), served before the per-page rate limit.
+  // The web pages' script, fonts (Geist, SIL Open Font License) and icon, served before the per-page
+  // rate limit.
   app.get("/assets/:file", (c) => {
     if (c.req.path === "/assets/app.js") {
       c.header("Content-Type", "text/javascript; charset=utf-8");
@@ -76,12 +93,13 @@ export function createApp(options: AppOptions) {
       c.header("X-Content-Type-Options", "nosniff");
       return c.body(APP_JS);
     }
-    const font = FONTS[c.req.path];
-    if (!font) return c.text("Not found", 404);
-    c.header("Content-Type", "font/woff2");
-    c.header("Cache-Control", "public, max-age=31536000, immutable");
+    const asset = ASSETS[c.req.path];
+    if (!asset) return c.text("Not found", 404);
+    c.header("Content-Type", asset.type);
+    c.header("Cache-Control", `public, max-age=${asset.maxAge}${asset.maxAge >= 31536000 ? ", immutable" : ""}`);
     c.header("X-Content-Type-Options", "nosniff");
-    return c.body(new Uint8Array(font));
+    if (asset.type === "image/svg+xml") c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+    return c.body(new Uint8Array(asset.body));
   });
   // When agents have a host of their own (ANYWHERE_MCP_ORIGIN), that host serves only the MCP endpoint
   // and the discovery documents; everything else is on the app's host. The MCP endpoint is not served

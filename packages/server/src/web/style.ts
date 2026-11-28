@@ -187,6 +187,15 @@ button:active, .btn:active { transform: scale(0.96); }
 .btn-danger:hover, button.danger:hover { background: var(--color-danger-wash); border-color: var(--color-danger); }
 .btn-solid-danger { background: var(--color-danger); color: var(--color-page); }
 .btn-solid-danger:hover { background: var(--color-danger); filter: brightness(0.92); }
+a.btn.secondary { background: var(--color-bg-inset); color: var(--color-text); }
+a.btn.secondary:hover { background: var(--color-border); }
+.i.i-fill { fill: currentColor; stroke: none; }
+.or { display: flex; align-items: center; gap: 0.75rem; color: var(--color-text-secondary); font-size: 0.8125rem; }
+.or::before, .or::after { content: ""; flex: 1; border-block-start: 1px solid var(--color-border); }
+.code-input { font-family: var(--font-mono, ui-monospace, monospace); font-size: 1.5rem; font-variant-numeric: tabular-nums; letter-spacing: 0.35em; text-align: center; }
+.error-inline { color: var(--color-danger); font-size: 0.875rem; }
+.list.compact .item { padding-block: 0.65rem; }
+[hidden] { display: none !important; }
 .btn-sm { min-height: 2.25rem; padding-inline: 0.9rem; font-size: 0.875rem; }
 .btn-wide { width: 100%; }
 .btn-icon { width: 2.25rem; min-height: 2.25rem; padding: 0; }
