@@ -289,15 +289,33 @@ describe("sending mail", () => {
     expect(body).toMatchObject({ from: "Anywhere <hello@mail.anywr.example>", reply_to: "support@anywr.example", to: ["e@example.com"], subject: "Your Anywhere sign-in code: 123456" });
   });
 
-  it("templates carry a plain-text part, no remote images, and say who sent them and why", () => {
+  it("templates carry a plain-text part, the server's own mark as the only image, and say who sent them and why", () => {
     const brand = { productName: "Anywhere", appUrl: "https://app.anywr.example", siteUrl: "https://anywr.example", supportEmail: "support@anywr.example" };
     for (const mail of [
       codeEmail(brand, "e@example.com", "signup", "654321", "https://app.anywr.example/signin/link?t=x", 10),
       securityEmail(brand, "e@example.com", "New sign-in", "New sign-in", ["Your account was signed in to with GitHub."], { when: new Date(0), device: "Chrome on macOS", ip: "203.0.113.x" }, "notice-signin"),
     ]) {
-      expect(mail.html).not.toMatch(/<img|<link|<script|src=/i);
+      // One image, the same address for every recipient, so it cannot report an open.
+      expect([...mail.html.matchAll(/src="([^"]*)"/g)].map((m) => m[1])).toEqual(["https://app.anywr.example/assets/mark.png"]);
+      expect(mail.html).not.toMatch(/<link|<script/i);
+      expect(mail.html).toContain('href="https://anywr.example"');
       expect(mail.text).toContain("This email was sent to e@example.com by Anywhere (app.anywr.example)");
       expect(mail.text).toContain("support@anywr.example");
     }
+    const notice = securityEmail(brand, "e@example.com", "New sign-in", "New sign-in", ["Signed in."], { when: new Date(0), device: "Chrome on macOS", ip: "203.0.113.x" }, "notice-signin");
+    expect(notice.text).toContain("Browser: Chrome on macOS");
+    expect(notice.html).toContain(">Network</td>");
+  });
+
+  it("serves the mark the emails show, and the icon for browser tabs", async () => {
+    t = await makeTestApp();
+    const png = await t.fetch("/assets/mark.png");
+    expect(png.status).toBe(200);
+    expect(png.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await png.arrayBuffer()).slice(1, 4)).toEqual(new TextEncoder().encode("PNG"));
+    const svg = await t.fetch("/assets/mark.svg");
+    expect(svg.headers.get("content-type")).toBe("image/svg+xml");
+    expect(svg.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(await (await t.fetch("/signin")).text()).toContain('rel="icon" href="/assets/mark.svg"');
   });
 });

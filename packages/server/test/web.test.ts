@@ -34,7 +34,7 @@ describe("accounts", () => {
     let jar = cookiesFrom(sent);
     const mail = t.mailer.last("new@example.com")!;
     expect(mail.subject).toMatch(/^Your Anywhere code: \d{6}$/);
-    expect(mail.html).not.toMatch(/<img|supabase|vercel/i);
+    expect(mail.html).not.toMatch(/supabase|vercel/i);
     const page = await (await t.fetch("/signin/code", { headers: { cookie: jar } })).text();
     expect(page).toContain("new@example.com");
 

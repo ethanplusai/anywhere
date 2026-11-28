@@ -19,6 +19,10 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ### Added
 
+- The web pages have an icon (`/assets/mark.svg`, `/assets/mark.png`), and every email shows the
+  mark beside the product name, with links to the website, account security and support in the
+  footer. The mark is loaded from the server's own `/assets/mark.png`, the same address for every
+  message. `assets/brand/logo-512.png` is a square logo for OAuth consent screens.
 - Sign in with GitHub through the server's own GitHub OAuth app (`GITHUB_CLIENT_ID`,
   `GITHUB_CLIENT_SECRET`), with `state` and PKCE.
 - Passkeys: add them on the security page, sign in with one, and use one to confirm changes.

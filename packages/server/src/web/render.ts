@@ -277,6 +277,8 @@ export function layout(title: string, body: Html, opts: LayoutOptions = {}): Htm
         <meta name="referrer" content="same-origin" />
         <meta name="color-scheme" content="light dark" />
         <title>${title} · Anywhere</title>
+        <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/assets/mark.png" />
         <link rel="preload" href="/assets/geist.woff2" as="font" type="font/woff2" crossorigin />
         <style>
           ${raw(STYLE)}

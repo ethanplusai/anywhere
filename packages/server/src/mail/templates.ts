@@ -2,8 +2,12 @@ import type { Mail } from "./mailer.js";
 
 /*
  * Every email Anywhere sends. Each has a plain-text body and an HTML body built from one layout:
- * inline styles only (mail clients drop style sheets), no remote images (many clients block them,
- * and they would tell a server when the mail was opened), and a footer saying why it was sent.
+ * inline styles only (mail clients drop style sheets), and a footer saying why it was sent.
+ *
+ * The only image is the mark beside the name at the top, loaded from this server's own
+ * /assets/mark.png. It is the same file for every message, with nothing in its address about the
+ * recipient, so it cannot tell anyone a message was opened; when a client blocks images, the name
+ * still reads as text.
  */
 
 export interface Brand {
@@ -28,24 +32,36 @@ interface Body {
   heading: string;
   paragraphs: string[];
   code?: string;
+  /** Label and value rows shown in a box, such as when and where a change came from. */
+  details?: [string, string][];
   button?: { label: string; url: string };
   /** Small print after the button: why this was sent, what to do if it was not you. */
   after: string[];
 }
 
+const host = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
 function render(brand: Brand, to: string, subject: string, tag: string, b: Body): Mail {
   const help = brand.supportEmail ? ` Questions? Write to ${brand.supportEmail}.` : "";
-  const footer = `This email was sent to ${to} by ${brand.productName} (${brand.appUrl.replace(/^https?:\/\//, "")}).${help}`;
+  const footer = `This email was sent to ${to} by ${brand.productName} (${host(brand.appUrl)}).${help}`;
+  const a = (href: string, label: string) => `<a href="${esc(href)}" style="color:${MUTED};text-decoration:underline">${esc(label)}</a>`;
+  const links = [
+    ...(brand.siteUrl && brand.siteUrl !== brand.appUrl ? [a(brand.siteUrl, host(brand.siteUrl))] : []),
+    a(`${brand.appUrl}/account/security`, "Account security"),
+    ...(brand.supportEmail ? [a(`mailto:${brand.supportEmail}`, brand.supportEmail)] : []),
+  ].join(`<span style="color:${BORDER}">&nbsp;&nbsp;|&nbsp;&nbsp;</span>`);
 
   const text = [
     b.heading,
     "",
     ...b.paragraphs.flatMap((p) => [p, ""]),
     ...(b.code ? [b.code, ""] : []),
+    ...(b.details?.length ? [...b.details.map(([k, v]) => `${k}: ${v}`), ""] : []),
     ...(b.button ? [`${b.button.label}: ${b.button.url}`, ""] : []),
     ...b.after.flatMap((p) => [p, ""]),
     "--",
     footer,
+    `Account security: ${brand.appUrl}/account/security`,
   ].join("\n");
 
   const p = (s: string, color = INK, size = 16) => `<p style="margin:0 0 16px;font:${size}px/1.55 ${FONT};color:${color}">${esc(s)}</p>`;
@@ -55,15 +71,16 @@ function render(brand: Brand, to: string, subject: string, tag: string, b: Body)
 <div style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(b.preheader)}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${PAGE}"><tr><td align="center" style="padding:32px 16px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px">
-<tr><td style="padding:0 4px 20px;font:600 17px/1 ${FONT};color:${INK}"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${ACCENT};vertical-align:-2px;margin-right:8px"></span>${esc(brand.productName)}</td></tr>
+<tr><td style="padding:0 4px 20px"><a href="${esc(brand.siteUrl || brand.appUrl)}" style="text-decoration:none;color:${INK}"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:10px;vertical-align:middle"><img src="${esc(brand.appUrl)}/assets/mark.png" width="26" height="26" alt="" style="display:block;border:0;width:26px;height:26px"></td><td style="vertical-align:middle;font:600 18px/1 ${FONT};letter-spacing:-0.01em;color:${INK}">${esc(brand.productName)}</td></tr></table></a></td></tr>
 <tr><td style="background:#ffffff;border:1px solid ${BORDER};border-radius:12px;padding:32px 28px">
 <h1 style="margin:0 0 16px;font:600 22px/1.3 ${FONT};color:${INK}">${esc(b.heading)}</h1>
 ${b.paragraphs.map((x) => p(x)).join("\n")}
 ${b.code ? `<p style="margin:8px 0 24px;font:600 34px/1 ui-monospace, SFMono-Regular, Menlo, monospace;letter-spacing:8px;color:${INK}">${esc(b.code)}</p>` : ""}
+${b.details?.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 24px;background:${PAGE};border-radius:8px">${b.details.map(([k, v], i) => `<tr><td style="padding:${i ? 0 : 12}px 14px ${i === b.details!.length - 1 ? 12 : 6}px;width:84px;font:13px/1.5 ${FONT};color:${MUTED};vertical-align:top">${esc(k)}</td><td style="padding:${i ? 0 : 12}px 14px ${i === b.details!.length - 1 ? 12 : 6}px 0;font:14px/1.5 ${FONT};color:${INK}">${esc(v)}</td></tr>`).join("")}</table>` : ""}
 ${b.button ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 24px"><tr><td style="border-radius:8px;background:${ACCENT}"><a href="${esc(b.button.url)}" style="display:inline-block;padding:12px 20px;font:600 15px/1 ${FONT};color:#ffffff;text-decoration:none;border-radius:8px">${esc(b.button.label)}</a></td></tr></table>` : ""}
 ${b.after.map((x) => p(x, MUTED, 14)).join("\n")}
 </td></tr>
-<tr><td style="padding:20px 4px 0;font:12px/1.5 ${FONT};color:${MUTED}">${esc(footer)}</td></tr>
+<tr><td style="padding:20px 4px 0;font:12px/1.6 ${FONT};color:${MUTED}"><p style="margin:0 0 8px">${links}</p><p style="margin:0">${esc(footer)}</p></td></tr>
 </table></td></tr></table>
 </body></html>`;
   return { to, subject, text, html, tag };
@@ -116,13 +133,14 @@ export interface NoticeContext {
 
 /** A change to the account its owner should know about, with where it came from and what to do. */
 export function securityEmail(brand: Brand, to: string, subject: string, heading: string, lines: string[], ctx: NoticeContext | null, tag: string): Mail {
-  const where = ctx
-    ? [`When: ${ctx.when.toUTCString()}`, ...(ctx.device ? [`Browser: ${ctx.device}`] : []), ...(ctx.ip ? [`Network: ${ctx.ip}`] : [])]
+  const details: [string, string][] = ctx
+    ? [["When", ctx.when.toUTCString()], ...(ctx.device ? [["Browser", ctx.device] as [string, string]] : []), ...(ctx.ip ? [["Network", ctx.ip] as [string, string]] : [])]
     : [];
   return render(brand, to, subject, tag, {
     preheader: lines[0] ?? heading,
     heading,
-    paragraphs: [...lines, ...(where.length ? [where.join("  ·  ")] : [])],
+    paragraphs: lines,
+    details,
     button: { label: "Review your account security", url: `${brand.appUrl}/account/security` },
     after: [
       "If this was you, there is nothing to do.",
