@@ -270,8 +270,8 @@ const MARK =
  * The handshake with the app that frames the page, its theme and size, and the three things the
  * page may ask of it: call one of this server's tools, post a message as the person, open a link.
  */
-const RUNTIME = `
-var pending = {}, nextId = 1, onData = function () {};
+export const RUNTIME = `
+var pending = {}, nextId = 1, onData = function () {}, host = {};
 function post(m) { window.parent.postMessage(m, "*"); }
 function request(method, params) {
   return new Promise(function (resolve, reject) {
@@ -286,6 +286,8 @@ function applyContext(ctx) {
 }
 if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.setAttribute("data-theme", "dark");
 window.addEventListener("message", function (e) {
+  // Only the app that frames this page speaks to it.
+  if (e.source !== window.parent) return;
   var m = e.data;
   if (!m || m.jsonrpc !== "2.0") return;
   if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
@@ -306,7 +308,7 @@ function el(tag, cls, text) {
 function start(render) {
   onData = function (data) { if (data && typeof data === "object") render(data); };
   request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "anywhere", version: "0.1.0" }, appCapabilities: {} })
-    .then(function (r) { applyContext(r && r.hostContext); }, function () {})
+    .then(function (r) { host = (r && r.hostCapabilities) || {}; applyContext(r && r.hostContext); }, function () {})
     .then(function () { notify("ui/notifications/initialized"); });
   if (window.ResizeObserver) {
     new ResizeObserver(function () {
@@ -315,7 +317,23 @@ function start(render) {
     }).observe(document.documentElement);
   }
 }
-function say(text) { return request("ui/message", { role: "user", content: { type: "text", text: text } }); }
+// Posts a message into the chat as the person, so the agent acts on it at once. Content is a list
+// of blocks (MCP Apps 2026-01-26); a host may also answer with isError instead of an error.
+function say(text) {
+  return request("ui/message", { role: "user", content: [{ type: "text", text: text }] }).then(function (r) {
+    if (r && r.isError) throw new Error("not delivered");
+    return r;
+  });
+}
+// Where the app will not post messages, hand the words to the agent as context for its next turn
+// instead. Resolves true when the host took them.
+function remember(text) {
+  if (!host.updateModelContext) return Promise.resolve(false);
+  return request("ui/update-model-context", { content: [{ type: "text", text: text }] }).then(
+    function (r) { return !(r && r.isError); },
+    function () { return false; }
+  );
+}
 function openLink(url) { return request("ui/open-link", { url: url }).catch(function () {}); }
 function callTool(name, args) {
   return request("tools/call", { name: name, arguments: args || {} }).then(function (r) {
@@ -637,9 +655,16 @@ function picker(d) {
     say(text).then(
       function () { count.textContent = "Sent. Your agent takes it from here."; },
       function () {
-        // The app would not post it for us: show the words so the person can send them.
-        app.insertBefore(el("p", "said", text), foot);
-        count.textContent = "Send this message to your agent:";
+        remember(text).then(function (kept) {
+          if (kept) {
+            // The agent has the choices; one short message from the person starts it.
+            count.textContent = "Your agent has your choices. Send it \\u201cgo\\u201d to set them up.";
+            return;
+          }
+          // Neither: show the words so the person can send them.
+          app.insertBefore(el("p", "said", text), foot);
+          count.textContent = "Send this message to your agent:";
+        });
       }
     );
   };

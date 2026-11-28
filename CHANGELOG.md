@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- Buttons in the in-chat panels (such as Confirm on the map of your work) post their message into the
+  chat again, in the shape MCP Apps requires (a list of content blocks). Where an app will not post
+  messages, the panel gives the choices to the agent as context and asks you to send "go", and only
+  shows text to copy when neither works. The panel also ignores messages from anything but the app
+  that frames it.
+
 ### Changed
 
 - Accounts have no passwords. People sign in with a six-digit code (and a one-time link) sent to
