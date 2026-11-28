@@ -15,6 +15,14 @@ the names of a project's docs and deploy files, never file or full conversation 
 node skill/anywhere/scripts/map-work.mjs
 ```
 
+## Over MCP, with nothing to install
+
+The server also hands this skill to agents that support the MCP Skills extension
+(`io.modelcontextprotocol/skills`, beta): Claude and Claude Code 2.1.331 or later. Connect
+Anywhere and the agent finds the skill itself, as `anywhere:anywhere` in Claude Code. Each file is
+served as `skill://anywhere/...` with its size and SHA-256, and the agent asks before it uses the
+skill, and again whenever it changes. Agents without the extension use the steps below.
+
 ## Install
 
 For Claude Code (`~/.claude/skills/anywhere`) and Codex (`~/.codex/skills/anywhere`), from the root of
