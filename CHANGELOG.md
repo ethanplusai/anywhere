@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- The MCP endpoint also speaks MCP revision 2026-07-28 (`server/discover`, the protocol version in
+  each request's `_meta`, `resultType` and cache hints on results), beside the older revisions,
+  which are unchanged.
+- Skills over MCP: the server offers the Anywhere skill through the Skills extension
+  (`io.modelcontextprotocol/skills`): `skills/list`, `skills/get`, and each file as
+  `skill://anywhere/...` with its size and SHA-256. Agents that support it, such as Claude and
+  Claude Code, get the skill when they connect, with nothing to install.
+
 ### Fixed
 
 - Buttons in the in-chat panels (such as Confirm on the map of your work) post their message into the

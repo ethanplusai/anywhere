@@ -2,7 +2,9 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Context } from "hono";
 import { guardBearer } from "../auth/guard.js";
 import { mcpUrl, resourceMetadataUrl, type Deps } from "../deps.js";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { buildMcpServer } from "./server.js";
+import { handleModern, modernRequest } from "./modern.js";
 
 const MAX_MCP_BODY = 2 * 1024 * 1024;
 
@@ -45,13 +47,29 @@ export function mcpHandler(deps: Deps) {
       if (/^\s*\[/.test(body)) {
         return c.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Batched JSON-RPC requests are not supported. Send one message per request." } }, 400);
       }
+      // A 2026-07-28 client: answered by the layer for that revision, which runs anything it does
+      // not handle itself through the same SDK server as below.
+      const modern = modernRequest(body);
+      if (modern) {
+        return handleModern(modern, (message) => {
+          const headers = new Headers(c.req.raw.headers);
+          headers.set("content-type", "application/json");
+          headers.set("accept", "application/json, text/event-stream");
+          headers.set("mcp-protocol-version", LATEST_PROTOCOL_VERSION);
+          headers.delete("mcp-session-id");
+          return run(new Request(c.req.raw.url, { method: "POST", headers, body: JSON.stringify(message) }));
+        });
+      }
       request = new Request(c.req.raw.url, { method: "POST", headers: c.req.raw.headers, body });
     }
+    return run(request);
 
-    const server = buildMcpServer(service, layout, userId, actor, { baseUrl: config.baseUrl });
-    // No sessionIdGenerator: stateless mode.
-    const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
-    await server.connect(transport);
-    return transport.handleRequest(request);
+    async function run(req: Request): Promise<Response> {
+      const server = buildMcpServer(service, layout, userId, actor, { baseUrl: config.baseUrl });
+      // No sessionIdGenerator: stateless mode.
+      const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+      await server.connect(transport);
+      return transport.handleRequest(req);
+    }
   }
 }

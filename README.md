@@ -73,7 +73,7 @@ Every project is the same small set of pages, so a chat agent and a coding agent
 | `log.md` | Short dated notes on what each session did. Append only. |
 | `topics/<name>.md` | One page per subject that outgrows the pages above. |
 
-The rules agents follow are written once, in [docs/layout.md](docs/layout.md), and served by the MCP server itself, so an agent learns how to keep the pages tidy just by connecting. The optional [skill](skill/README.md) teaches the same rules to coding agents ahead of time.
+The rules agents follow are written once, in [docs/layout.md](docs/layout.md), and served by the MCP server itself, so an agent learns how to keep the pages tidy just by connecting. The [skill](skill/README.md) teaches the same rules to coding agents ahead of time; agents that support MCP's Skills extension (Claude and Claude Code) get it from the server when they connect, with nothing to install.
 
 - **Versioned writes.** Every write names the version it read. If another agent changed the page in between, the write is refused and the agent merges and tries again, so nothing is silently overwritten.
 - **Who changed what.** Each version records which app or token made it. The web app shows the change history per page, with a line-by-line diff and one-click restore.
