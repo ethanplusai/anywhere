@@ -90,7 +90,7 @@ describe("project details over the API", () => {
 
   it("keeps one user's repos to themselves", async () => {
     await t.api("POST", "/projects", { name: "Rocket", repos: ["github.com/acme/rocket"] });
-    const someone = await createUser(t.db, "other@example.com", "long enough pw");
+    const someone = await createUser(t.db, "other@example.com");
     const { token } = await createPat(t.db, someone.id, "test");
     expect((await json(await t.api("GET", "/projects?repo=github.com/acme/rocket", undefined, token))).projects).toEqual([]);
   });

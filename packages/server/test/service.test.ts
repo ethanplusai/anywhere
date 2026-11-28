@@ -15,8 +15,8 @@ let other: string;
 beforeEach(async () => {
   db = await freshDb();
   svc = createService(db, loadLayout());
-  me = (await createUser(db, "me@example.com", "long enough pw")).id;
-  other = (await createUser(db, "other@example.com", "long enough pw")).id;
+  me = (await createUser(db, "me@example.com")).id;
+  other = (await createUser(db, "other@example.com")).id;
 });
 afterEach(async () => {
   await db.close();
@@ -297,7 +297,7 @@ describe("standard pages added after a project was made", () => {
     const db = await freshDb();
     try {
       const svc = createService(db, loadLayout());
-      const u = await createUser(db, "old@example.test", "long enough pw");
+      const u = await createUser(db, "old@example.test");
       await svc.createProject(u.id, { name: "Old" });
       await db.query("DELETE FROM pages WHERE path = 'plan.md'");
       const before = await db.query("SELECT 1 FROM pages WHERE path = 'plan.md'");

@@ -19,6 +19,7 @@ import { GEIST_MONO_WOFF2, GEIST_WOFF2 } from "./web/fonts.generated.js";
 import { APP_JS } from "./web/render.js";
 import { SKILL_FILES } from "./web/skill.generated.js";
 import { tarGz } from "./web/tar.js";
+import { createMailer, type Mailer } from "./mail/mailer.js";
 
 const SKILL_TGZ = tarGz(
   SKILL_FILES.map((f) => ({ ...f, mode: f.path.endsWith(".mjs") ? 0o755 : 0o644 })),
@@ -39,6 +40,8 @@ export interface AppOptions {
   local?: LocalSetup;
   /** Local mode only: how agents on this computer get connected. Tests replace it. */
   connector?: LocalConnector;
+  /** How email is sent. Tests pass a MemoryMailer; otherwise built from config.mail. */
+  mailer?: Mailer;
 }
 
 export function createApp(options: AppOptions) {
@@ -53,6 +56,14 @@ export function createApp(options: AppOptions) {
     fetch: options.fetch,
     local: options.local,
     connector: options.connector ?? (options.local ? localConnector(options.config, options.local) : undefined),
+    mailer: options.mailer ?? createMailer(options.config.mail),
+    brand: {
+      productName: options.config.productName,
+      appUrl: options.config.baseUrl,
+      siteUrl: options.config.siteUrl,
+      supportEmail: options.config.mail.supportEmail,
+    },
+    rp: { id: new URL(options.config.baseUrl).hostname, name: options.config.productName, origin: new URL(options.config.baseUrl).origin },
   };
   if (options.config.local && !options.local) throw new Error("Local mode needs prepareLocal() before createApp().");
 

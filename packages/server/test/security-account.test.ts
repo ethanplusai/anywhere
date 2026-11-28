@@ -1,9 +1,8 @@
 // Audit 2026-11-23: A3 (revocation, lifetimes), D5 (deletion pages), A8, A9, A11, A12, D6, D9.
 import { describe, expect, it } from "vitest";
-import { hashPassword, needsRehash } from "../src/auth/passwords.js";
 import { loadConfig } from "../src/config.js";
 import { renderMarkdown } from "../src/web/render.js";
-import { BASE, csrfFrom, makeTestApp, signIn, type TestApp } from "./helpers.js";
+import { BASE, codeFor, cookiesFrom, csrfFrom, makeTestApp, signIn, type TestApp } from "./helpers.js";
 import { grant, mcpStatus, tokenRequest } from "./oauth-flow.js";
 
 function post(body: Record<string, string>, cookie?: string, headers: Record<string, string> = { origin: BASE }): RequestInit {
@@ -118,32 +117,7 @@ describe("A3: connected apps can be revoked and expire", () => {
     }));
 });
 
-describe("A3: password change and sign-out everywhere", () => {
-  it("changes the password, ends other sessions, keeps this browser signed in, and can disconnect everything", () =>
-    withApp({}, async (t) => {
-      const here = await signIn(t);
-      const elsewhere = await signIn(t);
-      const g = await grant(t, here);
-      const account = await page(t, "/account", here);
-
-      const wrong = await t.fetch("/account/password", post({ _csrf: csrfFrom(account), current: "nope nope nope", password: "brand new password", confirm: "brand new password" }, here));
-      expect(wrong.status).toBe(400);
-
-      const res = await t.fetch(
-        "/account/password",
-        post({ _csrf: csrfFrom(account), current: "long enough pw", password: "brand new password", confirm: "brand new password", disconnect: "1" }, here),
-      );
-      expect(res.status).toBe(302);
-      const fresh = res.headers.get("set-cookie")!.split(";")[0]!;
-      expect((await t.fetch("/account", { headers: { cookie: fresh }, redirect: "manual" })).status).toBe(200);
-      expect((await t.fetch("/account", { headers: { cookie: elsewhere }, redirect: "manual" })).status).toBe(302);
-      expect((await t.fetch("/account", { headers: { cookie: here }, redirect: "manual" })).status).toBe(302);
-      expect(await mcpStatus(t, g.access)).toBe(401);
-      expect((await t.api("GET", "/me")).status).toBe(401); // the PAT was revoked too
-      await expect(signIn(t)).rejects.toThrow();
-      expect(await signIn(t, "me@example.com", "brand new password")).toMatch(/anywr_session=/);
-    }));
-
+describe("A3: sign-out everywhere and from one browser", () => {
   it("signs out every web session", () =>
     withApp({}, async (t) => {
       const a = await signIn(t);
@@ -154,59 +128,96 @@ describe("A3: password change and sign-out everywhere", () => {
       for (const cookie of [a, b]) expect((await t.fetch("/projects", { headers: { cookie }, redirect: "manual" })).status).toBe(302);
       expect((await t.api("GET", "/me")).status).toBe(200);
     }));
+
+  it("lists signed-in browsers and signs out one of them", () =>
+    withApp({}, async (t) => {
+      const here = await signIn(t);
+      const other = await signIn(t);
+      const security = await page(t, "/account/security", here);
+      expect(security).toContain("This browser");
+      const id = /action="\/account\/security\/sessions\/([^/]+)\/revoke"/.exec(security)![1]!;
+      expect((await t.fetch(`/account/security/sessions/${id}/revoke`, post({ _csrf: csrfFrom(security) }, here))).status).toBe(302);
+      expect((await t.fetch("/projects", { headers: { cookie: other }, redirect: "manual" })).status).toBe(302);
+      expect((await t.fetch("/projects", { headers: { cookie: here }, redirect: "manual" })).status).toBe(200);
+      expect(await page(t, "/account/security", here)).toContain("Signed out a browser");
+    }));
 });
 
 describe("D5: delete project and delete account pages", () => {
-  it("deletes a project only with CSRF, the typed slug and the password", () =>
+  const stale = (t: TestApp) => t.db.query("UPDATE web_sessions SET reauth_at = now() - interval '11 minutes'");
+
+  it("deletes a project only with CSRF, the typed slug and a recent sign-in", () =>
     withApp({}, async (t) => {
       await t.api("POST", "/projects", { name: "Gone Soon" });
       const cookie = await signIn(t);
       expect(await page(t, "/projects/gone-soon", cookie)).toContain('href="/projects/gone-soon/delete"');
       const form = await page(t, "/projects/gone-soon/delete", cookie);
       const csrf = csrfFrom(form);
-      expect((await t.fetch("/projects/gone-soon/delete", post({ confirm: "gone-soon", password: "long enough pw" }, cookie))).status).toBe(403);
-      expect((await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "nope", password: "long enough pw" }, cookie))).status).toBe(422);
-      expect((await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "gone-soon", password: "wrong password!" }, cookie))).status).toBe(400);
-      const res = await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "gone-soon", password: "long enough pw" }, cookie));
+      expect((await t.fetch("/projects/gone-soon/delete", post({ confirm: "gone-soon" }, cookie))).status).toBe(403);
+      expect((await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "nope" }, cookie))).status).toBe(422);
+      await stale(t);
+      const asked = await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "gone-soon" }, cookie));
+      expect(asked.status).toBe(302);
+      expect(asked.headers.get("location")).toBe("/account/confirm?next=%2Fprojects%2Fgone-soon%2Fdelete");
+      expect((await t.api("GET", "/projects/gone-soon")).status).toBe(200);
+
+      await confirmByEmail(t, cookie, "/projects/gone-soon/delete");
+      const res = await t.fetch("/projects/gone-soon/delete", post({ _csrf: csrf, confirm: "gone-soon" }, cookie));
       expect(res.status).toBe(302);
       expect((await t.api("GET", "/projects/gone-soon")).status).toBe(404);
     }));
 
-  it("deletes the account and everything in it after re-entering the password", () =>
+  it("deletes the account and everything in it, and says so by email", () =>
     withApp({}, async (t) => {
       await t.api("POST", "/projects", { name: "Mine" });
       const cookie = await signIn(t);
       const account = await page(t, "/account", cookie);
       const csrf = csrfFrom(account);
-      expect((await t.fetch("/account/delete", post({ _csrf: csrf, email: "me@example.com", password: "wrong password!" }, cookie))).status).toBe(400);
-      expect((await t.fetch("/account/delete", post({ _csrf: csrf, email: "other@example.com", password: "long enough pw" }, cookie))).status).toBe(422);
-      const res = await t.fetch("/account/delete", post({ _csrf: csrf, email: "ME@example.com", password: "long enough pw" }, cookie));
+      expect((await t.fetch("/account/delete", post({ _csrf: csrf, email: "other@example.com" }, cookie))).status).toBe(422);
+      const res = await t.fetch("/account/delete", post({ _csrf: csrf, email: "ME@example.com" }, cookie));
       expect(res.status).toBe(200);
       expect(await t.db.query("SELECT 1 FROM users")).toHaveLength(0);
       expect(await t.db.query("SELECT 1 FROM projects")).toHaveLength(0);
       expect(await t.db.query("SELECT 1 FROM pages")).toHaveLength(0);
       expect((await t.api("GET", "/me")).status).toBe(401);
+      expect(t.mailer.last("me@example.com")!.subject).toBe("Your Anywhere account was deleted");
     }));
 
-  it("counts failed re-authentication against the account lockout", () =>
-    withApp({ ANYWHERE_SIGNIN_EMAIL_LIMIT: "2" }, async (t) => {
-      await t.api("POST", "/projects", { name: "Keep" });
+  it("confirming by email needs the code sent to the account, in this browser", () =>
+    withApp({}, async (t) => {
       const cookie = await signIn(t);
-      const csrf = csrfFrom(await page(t, "/projects/keep/delete", cookie));
-      for (let i = 0; i < 2; i++) await t.fetch("/projects/keep/delete", post({ _csrf: csrf, confirm: "keep", password: "guess guess guess" }, cookie));
-      const res = await t.fetch("/projects/keep/delete", post({ _csrf: csrf, confirm: "keep", password: "long enough pw" }, cookie));
-      expect(res.status).toBe(400);
-      expect(await res.text()).toContain("Too many failed attempts");
-      expect((await t.api("GET", "/projects/keep")).status).toBe(200);
+      await stale(t);
+      const confirm = await page(t, "/account/confirm?next=/account", cookie);
+      expect(confirm).toContain("Email me a code");
+      const sent = await t.fetch("/account/confirm/send", post({ _csrf: csrfFrom(confirm), next: "/account" }, cookie));
+      expect(sent.status).toBe(200);
+      const mail = t.mailer.last("me@example.com")!;
+      expect(mail.subject).toMatch(/confirmation code/);
+      const code = /\b(\d{6})\b/.exec(mail.text)![1]!;
+      const wrong = await t.fetch("/account/confirm/code", post({ _csrf: csrfFrom(confirm), next: "/account", code: code === "000000" ? "111111" : "000000" }, cookie));
+      expect(wrong.status).toBe(400);
+      const ok = await t.fetch("/account/confirm/code", post({ _csrf: csrfFrom(confirm), next: "/account", code }, cookie));
+      expect(ok.status).toBe(302);
+      expect(ok.headers.get("location")).toBe("/account");
     }));
 });
+
+/** Proves it is the owner again, by an emailed code, in the browser holding `cookie`. */
+async function confirmByEmail(t: TestApp, cookie: string, next: string) {
+  const confirm = await page(t, `/account/confirm?next=${encodeURIComponent(next)}`, cookie);
+  await t.fetch("/account/confirm/send", post({ _csrf: csrfFrom(confirm), next }, cookie));
+  const code = /\b(\d{6})\b/.exec(t.mailer.last("me@example.com")!.text)![1]!;
+  const res = await t.fetch("/account/confirm/code", post({ _csrf: csrfFrom(confirm), next, code }, cookie));
+  if (res.status !== 302) throw new Error(`confirmation failed: ${res.status}`);
+}
 
 describe("A12: sessions", () => {
   it("ends the session already in the browser when someone signs in", () =>
     withApp({}, async (t) => {
       const first = await signIn(t);
-      await t.fetch("/signup", post({ email: "b@example.com", password: "another long pw" }));
-      const res = await t.fetch("/signin", post({ email: "b@example.com", password: "another long pw" }, first));
+      const sent = await t.fetch("/signin", post({ email: "b@example.com" }, first));
+      const jar = cookiesFrom(sent, first);
+      const res = await t.fetch("/signin/code", post({ code: codeFor(t, "b@example.com") }, jar));
       expect(res.status).toBe(302);
       expect((await t.fetch("/projects", { headers: { cookie: first }, redirect: "manual" })).status).toBe(302);
     }));
@@ -219,10 +230,13 @@ describe("A12: sessions", () => {
       expect((await t.fetch("/projects", { headers: { cookie }, redirect: "manual" })).status).toBe(302);
     }));
 
-  it("uses the __Host- cookie prefix on https", () =>
+  it("uses the __Host- cookie prefix on https, for the session and the browser id", () =>
     withApp({}, async (t) => {
-      const res = await t.fetch("/signin", post({ email: "me@example.com", password: "long enough pw" }));
-      const set = res.headers.get("set-cookie")!;
+      const sent = await t.fetch("/signin", post({ email: "me@example.com" }));
+      const browser = sent.headers.getSetCookie().find((c) => c.startsWith("__Host-anywr_browser="))!;
+      expect(browser).toMatch(/HttpOnly/i);
+      const res = await t.fetch("/signin/code", post({ code: codeFor(t, "me@example.com") }, cookiesFrom(sent)));
+      const set = res.headers.getSetCookie().find((c) => c.includes("anywr_session="))!;
       expect(set).toMatch(/^__Host-anywr_session=/);
       expect(set).toMatch(/Secure/);
       expect(set).toMatch(/Path=\//);
@@ -233,43 +247,27 @@ describe("A12: sessions", () => {
 describe("A11: login CSRF", () => {
   it("refuses sign-in with neither Origin nor Sec-Fetch-Site: same-origin", () =>
     withApp({}, async (t) => {
-      const body = { email: "me@example.com", password: "long enough pw" };
+      const body = { email: "me@example.com" };
       expect((await t.fetch("/signin", post(body, undefined, {}))).status).toBe(403);
       expect((await t.fetch("/signin", post(body, undefined, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
       expect((await t.fetch("/signin", post(body, undefined, { origin: "https://evil.example" }))).status).toBe(403);
-      expect((await t.fetch("/signin", post(body, undefined, { "sec-fetch-site": "same-origin" }))).status).toBe(302);
-      expect((await t.fetch("/signup", post({ email: "c@example.com", password: "another long pw" }, undefined, {}))).status).toBe(403);
-    }));
-});
-
-describe("A8: password hashing", () => {
-  it("hashes with scrypt N=2^15, r=8, p=3 and upgrades older hashes at sign-in", () =>
-    withApp({}, async (t) => {
-      const fresh = await hashPassword("whatever long");
-      expect(fresh.split(":").slice(0, 4)).toEqual(["scrypt", "32768", "8", "3"]);
-      expect(needsRehash(fresh)).toBe(false);
-      // An old-format hash (N=2^14, r=8, p=1) of the test user's password.
-      const { scrypt } = await import("node:crypto");
-      const salt = Buffer.alloc(16, 7);
-      const key = await new Promise<Buffer>((res, rej) => scrypt("long enough pw", salt, 64, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
-      await t.db.query("UPDATE users SET password_hash = $1", [`scrypt:16384:${salt.toString("base64")}:${key.toString("base64")}`]);
-      await signIn(t);
-      const [row] = await t.db.query<{ password_hash: string }>("SELECT password_hash FROM users");
-      expect(row!.password_hash.startsWith("scrypt:32768:8:3:")).toBe(true);
-      await signIn(t);
+      expect((await t.fetch("/passkeys/signin/options", { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: "{}" })).status).toBe(403);
+      expect(t.mailer.sent).toHaveLength(0);
+      expect((await t.fetch("/signin", post(body, undefined, { "sec-fetch-site": "same-origin" }))).status).toBe(303);
     }));
 });
 
 describe("A9: transport security", () => {
   it("sends HSTS on an https BASE_URL", () =>
     withApp({}, async (t) => {
-      expect((await t.fetch("/signin")).headers.get("strict-transport-security")).toBe("max-age=63072000");
+      expect((await t.fetch("/signin")).headers.get("strict-transport-security")).toBe("max-age=63072000; includeSubDomains");
     }));
 
   it("refuses to start in production without an https BASE_URL, except on loopback", () => {
-    expect(() => loadConfig({ NODE_ENV: "production", BASE_URL: "http://anywr.example" })).toThrow(/https/);
-    expect(() => loadConfig({ NODE_ENV: "production" })).not.toThrow(); // http://localhost:3000
-    expect(() => loadConfig({ NODE_ENV: "production", BASE_URL: "https://anywr.example" })).not.toThrow();
+    const mail = { RESEND_API_KEY: "re_test", ANYWHERE_MAIL_FROM: "Anywhere <hello@mail.anywr.example>" };
+    expect(() => loadConfig({ NODE_ENV: "production", BASE_URL: "http://anywr.example", ...mail })).toThrow(/https/);
+    expect(() => loadConfig({ NODE_ENV: "production", ...mail })).not.toThrow(); // http://localhost:3000
+    expect(() => loadConfig({ NODE_ENV: "production", BASE_URL: "https://anywr.example", ...mail })).not.toThrow();
   });
 });
 
@@ -310,7 +308,7 @@ describe("D9: no caching of authenticated responses", () => {
 describe("D10: deployment defaults", () => {
   it("refuses the embedded database in production unless allowed", async () => {
     const { embeddedDbRefusal } = await import("../src/config.js");
-    const prod = { NODE_ENV: "production", BASE_URL: "https://anywr.example" };
+    const prod = { NODE_ENV: "production", BASE_URL: "https://anywr.example", RESEND_API_KEY: "re_test", ANYWHERE_MAIL_FROM: "hello@mail.anywr.example" };
     expect(embeddedDbRefusal(loadConfig(prod), prod)).toMatch(/DATABASE_URL/);
     expect(embeddedDbRefusal(loadConfig({ ...prod, DATABASE_URL: "postgres://x" }), prod)).toBeNull();
     const allowed = { ...prod, ANYWHERE_ALLOW_EMBEDDED_DB: "1" };

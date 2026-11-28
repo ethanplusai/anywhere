@@ -2,10 +2,11 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Config } from "../config.js";
 import type { Db } from "../db/db.js";
-import { SESSION_MAX_AGE, checkCsrf, csrfToken, getSessionUser, sessionCookieName } from "../auth/sessions.js";
+import { SESSION_MAX_AGE, checkCsrf, csrfToken, getSession, sessionCookieName, type SessionInfo } from "../auth/sessions.js";
+import { randomToken } from "../auth/crypto.js";
 import type { User } from "../auth/users.js";
 
-export type WebEnv = { Variables: { user: User | null; sid: string | null; csrf: string } };
+export type WebEnv = { Variables: { user: User | null; sid: string | null; csrf: string; session: SessionInfo | null } };
 
 function secure(config: Config): boolean {
   return config.baseUrl.startsWith("https://");
@@ -14,8 +15,10 @@ function secure(config: Config): boolean {
 export function sessionMiddleware(db: Db, config: Config): MiddlewareHandler<WebEnv> {
   return async (c, next) => {
     const sid = getCookie(c, sessionCookieName(secure(config))) ?? null;
-    const user = await getSessionUser(db, sid ?? undefined, config.sessionIdleDays);
+    const found = await getSession(db, sid ?? undefined, config.sessionIdleDays);
+    const user = found?.user ?? null;
     c.set("user", user);
+    c.set("session", found?.session ?? null);
     c.set("sid", user ? sid : null);
     c.set("csrf", user && sid ? csrfToken(sid) : "");
     await next();
@@ -34,6 +37,20 @@ export function setSessionCookie(c: Context, config: Config, sid: string): void 
 
 export function clearSessionCookie(c: Context, config: Config): void {
   deleteCookie(c, sessionCookieName(secure(config)), { path: "/", secure: secure(config) });
+}
+
+/**
+ * A random id for this browser, in an HttpOnly cookie. Email codes and passkey challenges are tied to
+ * it, so a code or a challenge only works in the browser that asked for it. It identifies nothing
+ * else and is never shown.
+ */
+export function browserId(c: Context, config: Config): string {
+  const name = secure(config) ? "__Host-anywr_browser" : "anywr_browser";
+  const existing = getCookie(c, name);
+  if (existing && /^[A-Za-z0-9_-]{32,64}$/.test(existing)) return existing;
+  const id = randomToken(32);
+  setCookie(c, name, id, { httpOnly: true, sameSite: "Lax", secure: secure(config), path: "/", maxAge: 400 * 24 * 3600 });
+  return id;
 }
 
 /** For forms posted by a signed-in user. */

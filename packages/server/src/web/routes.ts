@@ -1,10 +1,8 @@
 import { Hono, type Context } from "hono";
 import { timingSafeEqual } from "node:crypto";
 import { html, raw } from "hono/html";
-import { createSession, deleteSession } from "../auth/sessions.js";
+import { createSession, deleteSession, type SignInMethod } from "../auth/sessions.js";
 import { createPat, listPats, revokePat } from "../auth/tokens.js";
-import { MIN_PASSWORD, createUser, verifyLogin } from "../auth/users.js";
-import { isApproved } from "../auth/early-access.js";
 import { mcpUrl, type Deps } from "../deps.js";
 import { clientIp, ipKey } from "../http.js";
 import { listGrants } from "../oauth/grants.js";
@@ -12,8 +10,11 @@ import { AppError } from "../service/errors.js";
 import { registerAccountRoutes, settingsPage } from "./account.js";
 import { registerPageRoutes } from "./pages.js";
 import { registerOnboarding } from "./onboarding.js";
+import { notify, placeOf } from "./notify.js";
+import { registerSignin } from "./signin.js";
+import { registerSecurityRoutes } from "./security.js";
 import { ago, appBadge, copyField, dateLabel, flash, icon, layout, logo, mark, type Html } from "./render.js";
-import { clearSessionCookie, csrfOk, originOk, safeNext, sessionMiddleware, setSessionCookie, type WebEnv } from "./session.js";
+import { clearSessionCookie, csrfOk, safeNext, sessionMiddleware, setSessionCookie, type WebEnv } from "./session.js";
 
 type C = Context<WebEnv>;
 type Status = 200 | 400 | 403 | 404 | 409 | 422 | 429 | 500;
@@ -60,7 +61,6 @@ function csrfField(c: C) {
 export function webRoutes(deps: Deps): Hono<WebEnv> {
   const { db, config, limiter } = deps;
   const authRule = { limit: config.authRateLimit, windowS: 60 };
-  const emailRule = { limit: config.signinEmailLimit, windowS: 15 * 60 };
   const addr = (c: C) => ipKey(clientIp(c, config));
   const view = (c: C, title: string, body: Html, status: Status = 200, kind: Kind = "app") => viewWith(config.signups === "open", config.siteUrl, c, title, body, status, kind);
   const statusPage = (c: C, status: Status, title: string, text: Html | string, actions?: Html) => statusPageWith(view, c, status, title, text, actions);
@@ -71,7 +71,7 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
     c.header("X-Frame-Options", "DENY");
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "same-origin");
-    if (config.baseUrl.startsWith("https://")) c.header("Strict-Transport-Security", "max-age=63072000"); // audit A9
+    if (config.baseUrl.startsWith("https://")) c.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains"); // audit A9
     // Pages for a signed-in person hold their notes: never cache them anywhere (audit D9).
     if (c.get("user")) c.header("Cache-Control", "private, no-store");
     if (c.res.headers.get("content-type")?.startsWith("text/html")) {
@@ -79,7 +79,7 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
       // its owner opens it (audit D6). The only script is this server's own /assets/app.js.
       c.header(
         "Content-Security-Policy",
-        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       );
     }
   });
@@ -112,63 +112,17 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
 
   app.get("/", (c) => c.redirect(c.get("user") ? "/projects" : "/signin", 302));
 
-  // ---------- sign up, sign in, sign out ----------
+  // ---------- sign in, sign out ----------
 
-  const gated = config.signups === "approved";
-  const requestLink = config.earlyAccessUrl
-    ? html`<a href="${config.earlyAccessUrl}">Request early access</a>`
-    : html`Ask the person who runs this server to approve your email`;
-
-  function authForm(c: C, kind: "signin" | "signup", opts: { error?: Html | string; email?: string; next?: string } = {}) {
-    const isUp = kind === "signup";
-    const next = opts.next ?? safeNext(c.req.query("next"));
-    const connecting = next.startsWith("/oauth/");
-    return html`<div class="auth-box">
-      ${mark(44)}
-      <h1>${isUp ? "Create your account" : connecting ? "Sign in to connect" : "Sign in to Anywhere"}</h1>
-      <p class="lead">${isUp
-        ? gated
-          ? "Anywhere is opening to people in waves. If your email has been approved, create your account here."
-          : "Free, with no card and no trial. Your agents get one shared memory."
-        : connecting
-          ? "An app wants to connect to your Anywhere account. Sign in first, then you can approve or deny it."
-          : "Your projects, and every change your agents made."}</p>
-      ${flash(opts.error ? { kind: "error", text: opts.error } : isUp && gated ? { kind: "notice", text: html`Not approved yet? ${requestLink}, and we will email you when your account is ready.` } : null)}
-      <form method="post" action="/${kind}" class="card">
-        <input type="hidden" name="next" value="${next}" />
-        <div class="field">
-          <label for="email">Email</label>
-          <input id="email" type="email" name="email" autocomplete="email" required value="${opts.email ?? ""}" ${opts.email ? "" : raw("autofocus")} />
-        </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input id="password" type="password" name="password" autocomplete="${isUp ? "new-password" : "current-password"}" required ${isUp ? raw(`minlength="${MIN_PASSWORD}"`) : ""} ${opts.email ? raw("autofocus") : ""} />
-          ${isUp ? html`<p class="hint">At least ${MIN_PASSWORD} characters.</p>` : ""}
-        </div>
-        <div class="form-actions"><button type="submit" class="btn-wide">${isUp ? "Create account" : "Sign in"}</button></div>
-      </form>
-      <p class="after">
-        ${isUp
-          ? html`Already have an account? <a href="/signin?next=${encodeURIComponent(next)}">Sign in</a>`
-          : config.disableSignups
-            ? ""
-            : gated
-              ? html`New to Anywhere? ${config.earlyAccessUrl ? requestLink : html`<a href="/signup">Create an account</a>`}. Approved already? <a href="/signup?next=${encodeURIComponent(next)}">Create your account</a>`
-              : html`New to Anywhere? <a href="/signup?next=${encodeURIComponent(next)}">Create an account</a>`}
-      </p>
-    </div>`;
+  async function startSession(c: C, userId: string, next: string, method: SignInMethod) {
+    // A session already in this browser (anyone's) ends at sign-in (audit A12).
+    const old = c.get("sid");
+    if (old) await deleteSession(db, old);
+    const place = placeOf(c, deps);
+    const sid = await createSession(db, userId, { method, ...place });
+    setSessionCookie(c, config, sid);
+    return c.redirect(safeNext(next), 302);
   }
-
-  const signupsClosed = (c: C) =>
-    view(
-      c,
-      "Sign-ups are closed",
-      html`<div class="auth-box">${mark(44)}<h1>This server is not taking new accounts</h1>
-        <p class="lead">Its owner has turned sign-ups off. If you already have an account, sign in.</p>
-        <a class="btn" href="/signin">Sign in</a></div>`,
-      403,
-      "auth",
-    );
 
   // ---------- local mode: no accounts, one owner, a one-time link unlocks the browser ----------
 
@@ -208,7 +162,7 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
       local.renewBrowserToken();
       const projects = await deps.service.listProjects(local.ownerId);
       const next = safeNext(form.next);
-      return startSession(c, local.ownerId, next === "/projects" && !projects.length ? "/welcome" : next);
+      return startSession(c, local.ownerId, next === "/projects" && !projects.length ? "/welcome" : next, "local");
     });
     app.get("/signin", (c) => c.redirect(`/local/unlock${new URL(c.req.url).search}`, 302));
     app.get("/signup", (c) => c.redirect("/local/unlock", 302));
@@ -216,80 +170,7 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
     app.post("/signup", (c) => c.redirect("/local/unlock", 303));
   }
 
-  app.get("/signup", (c) => {
-    if (c.get("user")) return c.redirect(safeNext(c.req.query("next")), 302);
-    const email = (c.req.query("email") ?? "").slice(0, 254);
-    return config.disableSignups ? signupsClosed(c) : view(c, "Create an account", authForm(c, "signup", email ? { email } : {}), 200, "auth");
-  });
-  app.get("/signin", (c) => {
-    if (c.get("user")) return c.redirect(safeNext(c.req.query("next")), 302);
-    return view(c, "Sign in", authForm(c, "signin"), 200, "auth");
-  });
-
-  async function startSession(c: C, userId: string, next: string) {
-    // A session already in this browser (anyone's) ends at sign-in (audit A12).
-    const old = c.get("sid");
-    if (old) await deleteSession(db, old);
-    const sid = await createSession(db, userId);
-    setSessionCookie(c, config, sid);
-    return c.redirect(safeNext(next), 302);
-  }
-
-  const forbidden = (c: C) => statusPage(c, 403, "That request was refused", "It did not come from this site. Reload the page and try again.");
-
-  app.post("/signup", async (c) => {
-    if (config.disableSignups) return signupsClosed(c);
-    if (!originOk(c, config)) return forbidden(c);
-    const form = await c.req.parseBody();
-    const email = str(form.email);
-    const rawNext = safeNext(form.next);
-    // A new account goes to the connect page first, unless it was on its way to approve an app.
-    const next = rawNext === "/projects" || rawNext === "/" ? "/welcome" : rawNext;
-    if ((await limiter.hit(`auth:${addr(c)}`, authRule)) !== null) {
-      return view(c, "Create an account", authForm(c, "signup", { error: "Too many attempts. Wait a minute and try again.", email, next: rawNext }), 429, "auth");
-    }
-    if (gated && !(await isApproved(db, email))) {
-      return view(
-        c,
-        "Create an account",
-        authForm(c, "signup", { error: html`That email is not approved yet. ${requestLink}, and we will email you when your account is ready.`, email, next: rawNext }),
-        403,
-        "auth",
-      );
-    }
-    try {
-      const user = await createUser(db, email, str(form.password));
-      return startSession(c, user.id, next);
-    } catch (err) {
-      if (err instanceof AppError) {
-        return view(c, "Create an account", authForm(c, "signup", { error: err.message, email, next: rawNext }), err.status === 409 ? 409 : 422, "auth");
-      }
-      throw err;
-    }
-  });
-
-  app.post("/signin", async (c) => {
-    if (!originOk(c, config)) return forbidden(c);
-    const form = await c.req.parseBody();
-    const email = str(form.email);
-    const next = safeNext(form.next);
-    if ((await limiter.hit(`auth:${addr(c)}`, authRule)) !== null) {
-      return view(c, "Sign in", authForm(c, "signin", { error: "Too many attempts. Wait a minute and try again.", email, next }), 429, "auth");
-    }
-    // Failures are also counted per account, so rotating addresses does not help a password guesser.
-    const accountKey = `signin-email:${email.trim().toLowerCase()}`;
-    const locked = await limiter.peek(accountKey, emailRule);
-    if (locked !== null) {
-      const minutes = Math.ceil(locked / 60);
-      return view(c, "Sign in", authForm(c, "signin", { error: `Too many failed attempts for this account. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`, email, next }), 429, "auth");
-    }
-    const user = await verifyLogin(db, email, str(form.password));
-    if (!user) {
-      await limiter.hit(accountKey, emailRule);
-      return view(c, "Sign in", authForm(c, "signin", { error: "That email and password do not match.", email, next }), 400, "auth");
-    }
-    return startSession(c, user.id, next);
-  });
+  if (!local) registerSignin(app, deps, { view, startSession });
 
   app.post("/signout", async (c) => {
     const form = await c.req.parseBody();
@@ -386,6 +267,7 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
     const name = str(form.name).trim() || "token";
     const days = { "30": 30, "90": 90, "365": 365, never: null }[str(form.expires)];
     const { token } = await createPat(db, c.get("user")!.id, name, days === undefined ? 90 : days);
+    await notify(deps, c, c.get("user")!, "token_created", name.slice(0, 100));
     return tokensPage(c, { name, token });
   });
 
@@ -395,10 +277,12 @@ export function webRoutes(deps: Deps): Hono<WebEnv> {
     const form = await c.req.parseBody();
     if (!csrfOk(c, form._csrf)) return statusPage(c, 403, "This form expired", "Reload the page and try again.", html`<a class="btn" href="/tokens">Back to tokens</a>`);
     await revokePat(db, c.get("user")!.id, c.req.param("id"));
+    await notify(deps, c, c.get("user")!, "token_revoked", "", { email: false });
     return c.redirect("/tokens?done=revoked", 302);
   });
 
   registerAccountRoutes(app, deps, { view, csrfField, requireUser });
+  registerSecurityRoutes(app, deps, { view, csrfField, requireUser });
   registerOnboarding(app, deps, { view, csrfField, requireUser });
 
   // ---------- connect an agent ----------

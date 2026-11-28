@@ -30,6 +30,8 @@ const ICONS: Record<string, string> = {
   read: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.5"/>',
   write: '<path d="M4.5 19.5h4l10-10a2.1 2.1 0 0 0-4-4l-10 10Z"/>',
   shield: '<path d="M12 3.5 5 6v5.5c0 4.2 3 7.6 7 9 4-1.4 7-4.8 7-9V6Z"/><path d="m9 12 2 2 4-4"/>',
+  mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/><path d="m4 7 8 6 8-6"/>',
+  monitor: '<rect x="3.5" y="4.5" width="17" height="11.5" rx="1.5"/><path d="M8.5 20h7M12 16v4"/>',
 };
 
 export function icon(name: keyof typeof ICONS | string): HtmlEscapedString {
@@ -338,6 +340,97 @@ document.addEventListener("submit", function (e) {
   var m = e.target.getAttribute("data-confirm");
   if (m && !window.confirm(m)) e.preventDefault();
 });
+// Passkeys: buttons with data-passkey="signin", "register" or "reauth" run the WebAuthn ceremony
+// against this server's /passkeys endpoints. Hidden in browsers that cannot do it.
+(function () {
+  var buttons = document.querySelectorAll("[data-passkey]");
+  if (!buttons.length) return;
+  function toBuf(s) {
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    var bin = atob(s), a = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return a.buffer;
+  }
+  function fromBuf(buf) {
+    var a = new Uint8Array(buf), s = "";
+    for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+    return btoa(s).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+  }
+  function creation(o) {
+    o.challenge = toBuf(o.challenge);
+    o.user.id = toBuf(o.user.id);
+    (o.excludeCredentials || []).forEach(function (c) { c.id = toBuf(c.id); });
+    return o;
+  }
+  function request(o) {
+    o.challenge = toBuf(o.challenge);
+    (o.allowCredentials || []).forEach(function (c) { c.id = toBuf(c.id); });
+    return o;
+  }
+  function asJSON(cred) {
+    var r = cred.response;
+    var out = { id: cred.id, rawId: fromBuf(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {}, response: { clientDataJSON: fromBuf(r.clientDataJSON) } };
+    if (cred.authenticatorAttachment) out.authenticatorAttachment = cred.authenticatorAttachment;
+    if (r.attestationObject) {
+      out.response.attestationObject = fromBuf(r.attestationObject);
+      out.response.transports = r.getTransports ? r.getTransports() : [];
+    }
+    if (r.authenticatorData) {
+      out.response.authenticatorData = fromBuf(r.authenticatorData);
+      out.response.signature = fromBuf(r.signature);
+      if (r.userHandle) out.response.userHandle = fromBuf(r.userHandle);
+    }
+    return out;
+  }
+  function post(url, body, csrf) {
+    var headers = { "content-type": "application/json" };
+    if (csrf) headers["x-csrf-token"] = csrf;
+    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body || {}), credentials: "same-origin" }).then(function (r) { return r.json(); });
+  }
+  function showError(btn, msg) {
+    var box = btn.closest(".card, .section, .auth-box");
+    var el = (box && box.querySelector("[data-passkey-error]")) || document.querySelector("[data-passkey-error]");
+    if (el) { el.textContent = msg; el.hidden = false; }
+  }
+  var supported = !!(window.PublicKeyCredential && navigator.credentials && window.fetch);
+  buttons.forEach(function (btn) {
+    var kind = btn.getAttribute("data-passkey");
+    if (!supported) {
+      if (kind === "register") {
+        btn.disabled = true;
+        var u = document.querySelector("[data-passkey-unsupported]");
+        if (u) u.hidden = false;
+      }
+      return;
+    }
+    btn.hidden = false;
+    var or = document.querySelector("[data-passkey-or]");
+    if (or) or.hidden = false;
+    btn.addEventListener("click", function () {
+      var csrf = btn.getAttribute("data-csrf"), next = btn.getAttribute("data-next") || "";
+      var base = kind === "register" ? "/passkeys/register" : kind === "reauth" ? "/passkeys/reauth" : "/passkeys/signin";
+      btn.disabled = true;
+      post(base + "/options", { next: next }, csrf).then(function (o) {
+        if (o.confirm) { location.href = o.confirm; return null; }
+        if (o.error) throw new Error(o.error);
+        return kind === "register" ? navigator.credentials.create({ publicKey: creation(o) }) : navigator.credentials.get({ publicKey: request(o) });
+      }).then(function (cred) {
+        return cred ? post(base + "/verify", asJSON(cred), csrf) : null;
+      }).then(function (r) {
+        if (!r) return;
+        if (r.error) throw new Error(r.error);
+        location.href = r.redirect || "/projects";
+      }).catch(function (e) {
+        btn.disabled = false;
+        var msg = e && e.name === "NotAllowedError" ? "The passkey prompt was closed or timed out. Try again."
+          : e && e.name === "InvalidStateError" ? "This device already has a passkey for your account."
+          : (e && e.message) || "That did not work. Try again.";
+        showError(btn, msg);
+      });
+    });
+  });
+})();
 `;
 
 // ---------- markdown ----------

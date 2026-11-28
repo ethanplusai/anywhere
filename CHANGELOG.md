@@ -4,7 +4,31 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+
+- Accounts have no passwords. People sign in with a six-digit code (and a one-time link) sent to
+  their email, with GitHub, or with a passkey. Existing accounts sign in by email from now on;
+  their password hashes are deleted by migration 009. Every account created now has a verified
+  email.
+- Deleting a project or the account, changing the email and adding or removing a way to sign in
+  need a confirmation in the last ten minutes (a passkey or an emailed code) instead of a password.
+- A server with accounts needs a way to send email: `RESEND_API_KEY` or `ANYWHERE_SMTP_URL`, and
+  `ANYWHERE_MAIL_FROM`. In production it refuses to start without one.
+- `ANYWHERE_SIGNIN_EMAIL_LIMIT` now limits codes sent to one address per hour (default 5).
+- HSTS includes subdomains; the web pages' CSP allows same-origin `fetch` for passkeys.
+
 ### Added
+
+- Sign in with GitHub through the server's own GitHub OAuth app (`GITHUB_CLIENT_ID`,
+  `GITHUB_CLIENT_SECRET`), with `state` and PKCE.
+- Passkeys: add them on the security page, sign in with one, and use one to confirm changes.
+- A security page: ways to sign in, passkeys, every signed-in browser (sign out any one of them),
+  and recent account activity with the browser and network each came from.
+- Security emails for new GitHub sign-ins, connected apps, new tokens, passkey and GitHub changes,
+  email changes (sent to the old address) and account deletion. Branded templates with plain-text
+  parts and no remote images. `ANYWHERE_MAIL_ALLOWLIST` keeps staging mail to test addresses.
+- Change the account's email, confirmed by a code sent to the new address.
+- Download every project at once from the security page.
 
 - Setting up maps the work a person already has. The skill's new `scripts/map-work.mjs` replaces
   `find-projects.mjs`: it merges every checkout, copy and worktree of a repository, groups

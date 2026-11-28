@@ -76,8 +76,8 @@ export async function prepareLocal(db: Db, config: Config): Promise<LocalSetup> 
   if (process.platform !== "win32") chmodSync(config.home, 0o700);
 
   const [found] = await db.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [OWNER_EMAIL]);
-  // The owner never signs in with a password, so it gets a long random one nobody knows.
-  const ownerId = found?.id ?? (await createUser(db, OWNER_EMAIL, randomToken(32))).id;
+  // The owner never signs in: the browser is unlocked with a token from a file instead.
+  const ownerId = found?.id ?? (await createUser(db, OWNER_EMAIL)).id;
 
   const agentTokenPath = join(config.home, "agent-token");
   const existing = readTokenFile(agentTokenPath);

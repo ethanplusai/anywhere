@@ -21,6 +21,10 @@ export async function purgeExpired(db: Db): Promise<Record<string, number>> {
     ["oauth_grants", "DELETE FROM oauth_grants WHERE expires_at < now() - interval '1 day' OR revoked_at < now() - interval '1 day'", []],
     ["personal_access_tokens", "DELETE FROM personal_access_tokens WHERE revoked_at < now() - interval '30 days' OR expires_at < now() - interval '30 days'", []],
     ["rate_limits", "DELETE FROM rate_limits WHERE window_start < $1", [Date.now() - 2 * 24 * 3600 * 1000]],
+    ["email_challenges", "DELETE FROM email_challenges WHERE expires_at < now() - interval '1 day'", []],
+    ["webauthn_challenges", "DELETE FROM webauthn_challenges WHERE expires_at < now()", []],
+    // A year of account activity is enough to spot anything odd.
+    ["security_events", "DELETE FROM security_events WHERE created_at < now() - interval '365 days'", []],
     ["cimd_failures", "DELETE FROM cimd_failures WHERE until < now()", []],
     [
       "oauth_clients",
